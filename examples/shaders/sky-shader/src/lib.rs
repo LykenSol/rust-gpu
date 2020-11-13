@@ -1,6 +1,6 @@
 //! Ported to Rust from https://github.com/Tw1ddle/Sky-Shader/blob/master/src/shaders/glsl/sky.fragment
 
-#![cfg_attr(target_arch = "spirv", no_std)]
+#![no_std]
 #![feature(lang_items)]
 #![feature(register_attr)]
 #![register_attr(spirv)]

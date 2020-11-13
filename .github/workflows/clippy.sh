@@ -29,13 +29,12 @@ function clippy_no_features() {
 
 # Core crates
 clippy crates/rustc_codegen_spirv
-clippy crates/spirv-builder
+clippy_no_features crates/spirv-builder
 
 # Examples
 
-clippy examples/runners/ash
-clippy examples/runners/wgpu
-
+clippy_no_features examples/runners/ash
+clippy_no_features examples/runners/wgpu
 clippy_no_features examples/runners/cpu
 clippy_no_features examples/shaders/sky-shader
 clippy_no_features examples/shaders/simplest-shader
