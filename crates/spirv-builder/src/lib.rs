@@ -171,11 +171,11 @@ impl SpirvBuilder {
     /// compiled dynamic library. If `codegen_source.compile_source` is `false`
     /// then then it will return the `codegen_source` path with the DLL file name.
     pub fn build_spirv_codegen(&self) -> Result<PathBuf> {
-        const DLL_FILE_NAME: &str = "rustc_codegen_spirv";
+        const CRATE_NAME: &str = "rustc_codegen_spirv";
         let dll_file_name = format!(
             "{}{}{}",
             env::consts::DLL_PREFIX,
-            DLL_FILE_NAME,
+            CRATE_NAME,
             env::consts::DLL_SUFFIX
         );
 
@@ -187,16 +187,8 @@ impl SpirvBuilder {
 
         let mut args = vec![
             "build".into(),
-            "--manifest-path".into(),
-            "crates/rustc_codegen_spirv/Cargo.toml".into(),
             format!("--features={}", self.codegen_options.spirv_tools),
         ];
-
-        std::process::Command::new("ls")
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .current_dir(&repo_dir)
-            .output()?;
 
         if self.codegen_options.release {
             args.push("--release".into());
@@ -205,7 +197,7 @@ impl SpirvBuilder {
         let output = rustc::cargo()
             .args(&args)
             .stderr(Stdio::inherit())
-            .current_dir(&repo_dir)
+            .current_dir(&repo_dir.join("crates").join(CRATE_NAME))
             .output()?;
 
         let backend = repo_dir
