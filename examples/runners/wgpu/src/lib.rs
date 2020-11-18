@@ -21,13 +21,13 @@ pub struct ShaderConstants {
 fn shader_module(shader: RustGPUShader) -> wgpu::ShaderModuleSource<'static> {
     match shader {
         RustGPUShader::Compute => {
-            wgpu::include_spirv!(concat!(env!("OUT_DIR"), "/spirv/compute_shader.spv"))
+            wgpu::include_spirv!(concat!(env!("OUT_DIR"), "/compute_shader.spv"))
         }
         RustGPUShader::Simplest => {
-            wgpu::include_spirv!(concat!(env!("OUT_DIR"), "/spirv/simplest_shader.spv"))
+            wgpu::include_spirv!(concat!(env!("OUT_DIR"), "/simplest_shader.spv"))
         }
         RustGPUShader::Sky => {
-            wgpu::include_spirv!(concat!(env!("OUT_DIR"), "/spirv/sky_shader.spv"))
+            wgpu::include_spirv!(concat!(env!("OUT_DIR"), "/sky_shader.spv"))
         }
     }
 }
