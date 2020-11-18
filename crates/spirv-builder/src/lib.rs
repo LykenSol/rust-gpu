@@ -192,6 +192,12 @@ impl SpirvBuilder {
             format!("--features={}", self.codegen_options.spirv_tools),
         ];
 
+        std::process::Command::new("ls")
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .current_dir(&repo_dir)
+            .output()?;
+
         if self.codegen_options.release {
             args.push("--release".into());
         }
