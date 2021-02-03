@@ -98,7 +98,7 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                             tokens.push(vec![]);
                         }
                         let mut chars = line.chars();
-                        while let Some(token) = self.lex_word(&mut chars) {
+                        while let Some(token) = InlineAsmCx::Local(self).lex_word(&mut chars) {
                             tokens.last_mut().unwrap().push(token);
                         }
                     }
@@ -140,7 +140,11 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
             }
         }
         for line in tokens {
-            self.codegen_asm(&mut id_map, &mut id_to_type_map, line.into_iter());
+            InlineAsmCx::Local(self).codegen_asm(
+                &mut id_map,
+                &mut id_to_type_map,
+                line.into_iter(),
+            );
         }
     }
 }
@@ -166,7 +170,41 @@ enum OutRegister<'a> {
     Place(PlaceRef<'a, SpirvValue>),
 }
 
-impl<'cx, 'tcx> Builder<'cx, 'tcx> {
+enum InlineAsmCx<'a, 'cx, 'tcx> {
+    Global(&'cx CodegenCx<'tcx>, Span),
+    Local(&'a mut Builder<'cx, 'tcx>),
+}
+
+impl<'cx, 'tcx> std::ops::Deref for InlineAsmCx<'_, 'cx, 'tcx> {
+    type Target = &'cx CodegenCx<'tcx>;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Global(cx, _) | Self::Local(Builder { cx, .. }) => cx,
+        }
+    }
+}
+
+impl InlineAsmCx<'_, '_, '_> {
+    fn span(&self) -> Span {
+        match self {
+            &Self::Global(_, span) => span,
+            Self::Local(bx) => bx.span(),
+        }
+    }
+
+    fn err(&self, msg: &str) {
+        self.tcx.sess.span_err(self.span(), msg)
+    }
+
+    fn emit(&self) -> std::cell::RefMut<'_, rspirv::dr::Builder> {
+        match self {
+            Self::Global(cx, _) => cx.emit_global(),
+            Self::Local(bx) => bx.emit(),
+        }
+    }
+}
+
+impl<'cx, 'tcx> InlineAsmCx<'_, 'cx, 'tcx> {
     fn lex_word<'a>(&self, line: &mut std::str::Chars<'a>) -> Option<Token<'a, 'cx, 'tcx>> {
         loop {
             let start = line.as_str();
@@ -358,13 +396,12 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
         }
         self.insert_inst(id_map, instruction);
         if let Some(OutRegister::Place(place)) = out_register {
+            let place = match self {
+                Self::Global(..) => unreachable!(),
+                Self::Local(bx) => place.llval.def(bx),
+            };
             self.emit()
-                .store(
-                    place.llval.def(self),
-                    result_id.unwrap(),
-                    None,
-                    std::iter::empty(),
-                )
+                .store(place, result_id.unwrap(), None, std::iter::empty())
                 .unwrap();
         }
     }
@@ -755,7 +792,10 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
             Token::Placeholder(hole, span) => match hole {
                 InlineAsmOperandRef::In { reg, value } => {
                     self.check_reg(span, reg);
-                    Some(value.immediate().def(self))
+                    match self {
+                        Self::Global(..) => unreachable!(),
+                        Self::Local(bx) => Some(value.immediate().def(bx)),
+                    }
                 }
                 InlineAsmOperandRef::Out {
                     reg,
@@ -775,7 +815,10 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     out_place: _,
                 } => {
                     self.check_reg(span, reg);
-                    Some(in_value.immediate().def(self))
+                    match self {
+                        Self::Global(..) => unreachable!(),
+                        Self::Local(bx) => Some(in_value.immediate().def(bx)),
+                    }
                 }
                 InlineAsmOperandRef::Const { string: _ } => {
                     self.tcx
