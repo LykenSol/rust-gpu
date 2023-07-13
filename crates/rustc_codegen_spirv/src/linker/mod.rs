@@ -31,6 +31,7 @@ use rustc_session::Session;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
+use std::time::Instant;
 
 pub type Result<T> = std::result::Result<T, ErrorGuaranteed>;
 
@@ -40,6 +41,7 @@ pub struct Options {
     pub dce: bool,
     pub early_report_zombies: bool,
     pub infer_storage_classes: bool,
+    pub legacy_mem2reg: bool,
     pub structurize: bool,
     pub spirt_passes: Vec<String>,
 
@@ -411,13 +413,15 @@ pub fn link(
         for func in &mut output.functions {
             simple_passes::block_ordering_pass(func);
             // Note: mem2reg requires functions to be in RPO order (i.e. block_ordering_pass)
-            mem2reg::mem2reg(
-                output.header.as_mut().unwrap(),
-                &mut output.types_global_values,
-                &pointer_to_pointee,
-                &constants,
-                func,
-            );
+            if opts.legacy_mem2reg {
+                mem2reg::mem2reg(
+                    output.header.as_mut().unwrap(),
+                    &mut output.types_global_values,
+                    &pointer_to_pointee,
+                    &constants,
+                    func,
+                );
+            }
         }
     }
 
@@ -475,13 +479,15 @@ pub fn link(
         for func in &mut output.functions {
             simple_passes::block_ordering_pass(func);
             // Note: mem2reg requires functions to be in RPO order (i.e. block_ordering_pass)
-            mem2reg::mem2reg(
-                output.header.as_mut().unwrap(),
-                &mut output.types_global_values,
-                &pointer_to_pointee,
-                &constants,
-                func,
-            );
+            if opts.legacy_mem2reg {
+                mem2reg::mem2reg(
+                    output.header.as_mut().unwrap(),
+                    &mut output.types_global_values,
+                    &pointer_to_pointee,
+                    &constants,
+                    func,
+                );
+            }
         }
     }
 
@@ -523,15 +529,32 @@ pub fn link(
         };
         let module = &mut *dump_guard.module;
         // FIXME(eddyb) set the name into `dump_guard` to be able to access it on panic.
-        let before_pass = |pass| sess.timer(pass);
-        let mut after_pass = |pass, module: &spirt::Module, maybe_timer| {
-            drop(maybe_timer);
-            if opts.dump_spirt_passes.is_some() {
-                dump_guard
-                    .per_pass_module_for_dumping
-                    .push((pass, module.clone()));
-            }
-        };
+        let before_pass = |pass| (sess.timer(pass), Instant::now());
+        let mut after_pass =
+            |pass: &str,
+             module: &spirt::Module,
+             maybe_timer_and_start_time: Option<(_, Instant)>| {
+                let maybe_elapsed = maybe_timer_and_start_time
+                    .as_ref()
+                    .map(|(_, start_time)| start_time.elapsed());
+                drop(maybe_timer_and_start_time);
+                if opts.dump_spirt_passes.is_some() {
+                    let pass = match maybe_elapsed {
+                        Some(elapsed) => {
+                            let elapsed_secs = elapsed.as_secs_f64();
+                            if elapsed_secs >= 1.0 {
+                                format!("{pass} ({:.3}s)", elapsed.as_secs_f64()).into()
+                            } else {
+                                format!("{pass} ({:.1}ms)", elapsed.as_secs_f64() * 1000.0).into()
+                            }
+                        }
+                        None => pass.to_string().into(),
+                    };
+                    dump_guard
+                        .per_pass_module_for_dumping
+                        .push((pass, module.clone()));
+                }
+            };
         // HACK(eddyb) don't dump the unstructured state if not requested, as
         // after SPIR-T 0.4.0 it's extremely verbose (due to def-use hermeticity).
         if opts.spirt_keep_unstructured_cfg_in_dumps || !opts.structurize {
@@ -751,7 +774,7 @@ struct SpirtDumpGuard<'a> {
     disambiguated_crate_name_for_dumps: &'a OsStr,
 
     module: &'a mut spirt::Module,
-    per_pass_module_for_dumping: Vec<(&'static str, spirt::Module)>,
+    per_pass_module_for_dumping: Vec<(Cow<'static, str>, spirt::Module)>,
     any_spirt_bugs: bool,
 }
 
@@ -777,7 +800,7 @@ impl Drop for SpirtDumpGuard<'_> {
         if self.any_spirt_bugs && dump_spirt_file_path.is_none() {
             if self.per_pass_module_for_dumping.is_empty() {
                 self.per_pass_module_for_dumping
-                    .push(("", self.module.clone()));
+                    .push(("".into(), self.module.clone()));
             }
             dump_spirt_file_path = Some(self.outputs.temp_path_ext("spirt", None));
         }
