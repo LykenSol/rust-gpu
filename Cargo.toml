@@ -57,3 +57,7 @@ codegen-units = 256
 opt-level = 3
 incremental = true
 codegen-units = 256
+
+[patch.crates-io]
+# HACK(eddyb) temporary until branch gets merged (and/or SPIR-T 0.5.0 is released).
+spirt = { git = "https://github.com/LykenSol/spirt", branch = "vector" }
