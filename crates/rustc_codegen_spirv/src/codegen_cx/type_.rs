@@ -193,6 +193,7 @@ impl<'tcx> BaseTypeMethods<'tcx> for CodegenCx<'tcx> {
             def_id: None,
             align,
             size,
+            name: None,
             field_types: els,
             field_offsets: &field_offsets,
             field_names: None,

@@ -134,6 +134,19 @@ fn fn_parameters(module: &Module) -> FxHashMap<Word, Vec<Word>> {
         .collect()
 }
 
+fn gather_names(debug_names: &[Instruction]) -> FxHashMap<Word, String> {
+    debug_names
+        .iter()
+        .filter(|inst| inst.class.opcode == Op::Name)
+        .map(|inst| {
+            (
+                inst.operands[0].unwrap_id_ref(),
+                inst.operands[1].unwrap_literal_string().to_owned(),
+            )
+        })
+        .collect()
+}
+
 fn check_tys_equal(
     sess: &Session,
     module: &Module,
@@ -160,17 +173,26 @@ fn check_tys_equal(
             .iter()
             .filter_map(|inst| Some((inst.result_id?, inst)))
             .collect();
-        fn format_ty(ty_defs: &FxHashMap<Word, &Instruction>, ty: Word, buf: &mut String) {
+        let names = gather_names(&module.debug_names);
+        fn format_ty(
+            ty_defs: &FxHashMap<Word, &Instruction>,
+            names: &FxHashMap<Word, String>,
+            ty: Word,
+            buf: &mut String,
+        ) {
             match ty_defs.get(&ty) {
                 Some(def) => {
                     write!(buf, "({}", def.class.opname).unwrap();
                     if let Some(result_type) = def.result_type {
                         write!(buf, " {result_type}").unwrap();
                     }
+                    if let Some(name) = names.get(&ty) {
+                        write!(buf, " \"{name}\"").unwrap();
+                    }
                     for op in &def.operands {
                         if let Some(id) = op.id_ref_any() {
                             write!(buf, " ").unwrap();
-                            format_ty(ty_defs, id, buf);
+                            format_ty(ty_defs, names, id, buf);
                         }
                     }
                     write!(buf, ")").unwrap();
@@ -178,20 +200,24 @@ fn check_tys_equal(
                 None => write!(buf, "{ty}").unwrap(),
             }
         }
-        fn format_ty_(ty_defs: &FxHashMap<Word, &Instruction>, ty: Word) -> String {
+        fn format_ty_(
+            ty_defs: &FxHashMap<Word, &Instruction>,
+            names: &FxHashMap<Word, String>,
+            ty: Word,
+        ) -> String {
             let mut result = String::new();
-            format_ty(ty_defs, ty, &mut result);
+            format_ty(ty_defs, names, ty, &mut result);
             result
         }
         Err(sess
             .struct_err(format!("Types mismatch for {name:?}"))
             .note(format!(
                 "import type: {}",
-                format_ty_(&ty_defs, import_type)
+                format_ty_(&ty_defs, &names, import_type)
             ))
             .note(format!(
                 "export type: {}",
-                format_ty_(&ty_defs, export_type)
+                format_ty_(&ty_defs, &names, export_type)
             ))
             .emit())
     }

@@ -365,11 +365,12 @@ impl<'tcx> ConvSpirvType<'tcx> for TyAndLayout<'tcx> {
                 def_id: def_id_for_spirv_type_adt(*self),
                 size: Some(Size::ZERO),
                 align: Align::from_bytes(0).unwrap(),
+                name: Some(name_symbol_from_ty(self)),
                 field_types: &[],
                 field_offsets: &[],
                 field_names: None,
             }
-            .def_with_name(cx, span, TyLayoutNameKey::from(*self)),
+            .def(span, cx),
             Abi::Scalar(scalar) => trans_scalar(cx, span, *self, scalar, Size::ZERO),
             Abi::ScalarPair(a, b) => {
                 // NOTE(eddyb) unlike `Abi::Scalar`'s simpler newtype-unpacking
@@ -431,6 +432,7 @@ impl<'tcx> ConvSpirvType<'tcx> for TyAndLayout<'tcx> {
                     def_id: def_id_for_spirv_type_adt(*self),
                     size,
                     align: self.align.abi,
+                    name: Some(name_symbol_from_ty(self)),
                     field_types: &[a, b],
                     field_offsets: &[a_offset, b_offset],
                     field_names: if field_names.len() == 2 {
@@ -439,7 +441,7 @@ impl<'tcx> ConvSpirvType<'tcx> for TyAndLayout<'tcx> {
                         None
                     },
                 }
-                .def_with_name(cx, span, TyLayoutNameKey::from(*self))
+                .def(span, cx)
             }
             Abi::Vector { element, count } => {
                 let elem_spirv = trans_scalar(cx, span, *self, element, Size::ZERO);
@@ -601,11 +603,12 @@ fn trans_aggregate<'tcx>(cx: &CodegenCx<'tcx>, span: Span, ty: TyAndLayout<'tcx>
             def_id: def_id_for_spirv_type_adt(ty),
             size: Some(Size::ZERO),
             align: Align::from_bytes(0).unwrap(),
+            name: Some(name_symbol_from_ty(&ty)),
             field_types: &[],
             field_offsets: &[],
             field_names: None,
         }
-        .def_with_name(cx, span, TyLayoutNameKey::from(ty))
+        .def(span, cx)
     }
     match ty.fields {
         FieldsShape::Primitive => span_bug!(
@@ -731,11 +734,16 @@ fn trans_struct<'tcx>(cx: &CodegenCx<'tcx>, span: Span, ty: TyAndLayout<'tcx>) -
         def_id: def_id_for_spirv_type_adt(ty),
         size,
         align,
+        name: Some(name_symbol_from_ty(&ty)),
         field_types: &field_types,
         field_offsets: &field_offsets,
         field_names: Some(&field_names),
     }
-    .def_with_name(cx, span, TyLayoutNameKey::from(ty))
+    .def(span, cx)
+}
+
+fn name_symbol_from_ty<'tcx>(ty: &TyAndLayout<'tcx>) -> Symbol {
+    Symbol::intern(&format!("{}", TyLayoutNameKey::from(*ty)))
 }
 
 /// Grab a `DefId` from the type if possible to avoid too much deduplication,
@@ -751,6 +759,7 @@ fn def_id_for_spirv_type_adt(layout: TyAndLayout<'_>) -> Option<DefId> {
     }
 }
 
+// FIXME needed?
 /// Minimal and cheaply comparable/hashable subset of the information contained
 /// in `TyLayout` that can be used to generate a name (assuming a nominal type).
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]

@@ -1,7 +1,6 @@
-use crate::abi::{RecursivePointeeCache, TyLayoutNameKey};
+use crate::abi::RecursivePointeeCache;
 use crate::builder_spirv::SpirvValue;
 use crate::codegen_cx::CodegenCx;
-use indexmap::IndexSet;
 use rspirv::dr::Operand;
 use rspirv::spirv::{Capability, Decoration, Dim, ImageFormat, StorageClass, Word};
 use rustc_data_structures::fx::FxHashMap;
@@ -37,6 +36,7 @@ pub enum SpirvType<'tcx> {
 
         align: Align,
         size: Option<Size>,
+        name: Option<Symbol>,
         field_types: &'tcx [Word],
         field_offsets: &'tcx [Size],
         field_names: Option<&'tcx [Symbol]>,
@@ -150,6 +150,7 @@ impl SpirvType<'_> {
                 def_id: _,
                 align: _,
                 size: _,
+                name,
                 field_types,
                 field_offsets,
                 field_names,
@@ -166,6 +167,9 @@ impl SpirvType<'_> {
                             .iter()
                             .cloned(),
                     );
+                }
+                if let Some(name) = name {
+                    emit.name(result, name.to_string());
                 }
                 if let Some(field_names) = field_names {
                     for (index, field_name) in field_names.iter().enumerate() {
@@ -304,24 +308,6 @@ impl SpirvType<'_> {
         result
     }
 
-    /// In addition to `SpirvType::def`, also name the resulting type (with `OpName`).
-    pub fn def_with_name<'tcx>(
-        self,
-        cx: &CodegenCx<'tcx>,
-        def_span: Span,
-        name_key: TyLayoutNameKey<'tcx>,
-    ) -> Word {
-        let id = self.def(def_span, cx);
-
-        // Only emit `OpName` if this is the first time we see this name.
-        let mut type_names = cx.type_cache.type_names.borrow_mut();
-        if type_names.entry(id).or_default().insert(name_key) {
-            cx.emit_global().name(id, name_key.to_string());
-        }
-
-        id
-    }
-
     pub fn sizeof(&self, cx: &CodegenCx<'_>) -> Option<Size> {
         let result = match *self {
             // Types that have a dynamic size, or no concept of size at all.
@@ -433,6 +419,7 @@ impl SpirvType<'_> {
                 def_id,
                 align,
                 size,
+                name,
                 field_types,
                 field_offsets,
                 field_names,
@@ -440,6 +427,7 @@ impl SpirvType<'_> {
                 def_id,
                 align,
                 size,
+                name,
                 field_types: arena_alloc_slice(cx, field_types),
                 field_offsets: arena_alloc_slice(cx, field_offsets),
                 field_names: field_names.map(|field_names| arena_alloc_slice(cx, field_names)),
@@ -501,6 +489,7 @@ impl fmt::Debug for SpirvTypePrinter<'_, '_> {
                 def_id,
                 align,
                 size,
+                name,
                 field_types,
                 field_offsets,
                 field_names,
@@ -514,6 +503,7 @@ impl fmt::Debug for SpirvTypePrinter<'_, '_> {
                     .field("def_id", &def_id)
                     .field("align", &align)
                     .field("size", &size)
+                    .field("name", &name)
                     .field("field_types", &fields)
                     .field("field_offsets", &field_offsets)
                     .field("field_names", &field_names)
@@ -649,25 +639,13 @@ impl SpirvTypePrinter<'_, '_> {
                 def_id: _,
                 align: _,
                 size: _,
+                name,
                 field_types,
                 field_offsets: _,
                 ref field_names,
             } => {
                 write!(f, "struct")?;
-
-                // HACK(eddyb) use the first name (in insertion order, i.e.
-                // from the first invocation of `def_with_name` for this type)
-                // even when this may not be correct - a better solution could
-                // be to pick the shortest name (which could work well when
-                // newtypes are involved).
-                let first_name = {
-                    let type_names = self.cx.type_cache.type_names.borrow();
-                    type_names
-                        .get(&self.id)
-                        .and_then(|names| names.iter().next().copied())
-                };
-
-                if let Some(name) = first_name {
+                if let Some(name) = name {
                     write!(f, " {name}")?;
                 }
 
@@ -764,10 +742,6 @@ pub struct TypeCache<'tcx> {
 
     /// Recursive pointer breaking
     pub recursive_pointee_cache: RecursivePointeeCache<'tcx>,
-    /// Set of names for a type (only `SpirvType::Adt` currently).
-    /// The same `OpType*` may have multiple names if it's e.g. a generic
-    /// `struct` where the generic parameters result in the same field types.
-    type_names: RefCell<FxHashMap<Word, IndexSet<TyLayoutNameKey<'tcx>>>>,
 }
 
 impl<'tcx> TypeCache<'tcx> {

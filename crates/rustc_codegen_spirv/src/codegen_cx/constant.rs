@@ -213,6 +213,7 @@ impl<'tcx> ConstMethods<'tcx> for CodegenCx<'tcx> {
             def_id: None,
             size,
             align,
+            name: None,
             field_types: &field_types,
             field_offsets: &field_offsets,
             field_names: None,
