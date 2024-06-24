@@ -2396,7 +2396,7 @@ dependencies = [
 [[package]]
 name = "spirt"
 version = "0.4.0"
-source = "git+https://github.com/LykenSol/spirt?branch=qptr-mem-pnp#c2a62ce3604deac4b1701f94390a0b41a4c36624"
+source = "git+https://github.com/LykenSol/spirt?branch=ephemera/polaris#85506e2507e81595e1dadf75b14ed82e4d5e310e"
 dependencies = [
  "arrayvec",
  "bytemuck",

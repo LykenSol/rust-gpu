@@ -60,4 +60,5 @@ codegen-units = 256
 
 [patch.crates-io]
 # HACK(eddyb) temporary until branch gets merged (and/or SPIR-T 0.5.0 is released).
-spirt = { git = "https://github.com/LykenSol/spirt", branch = "qptr-mem-pnp" }
+# HACK(eddyb) git dep currently used from `crates/rustc_codegen_spirv/Cargo.toml`.
+# spirt = { git = "https://github.com/LykenSol/spirt", branch = "ephemera/polaris" }
