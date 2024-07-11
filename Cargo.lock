@@ -2398,8 +2398,7 @@ dependencies = [
 [[package]]
 name = "spirt"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64e1f7903720ff818d6da824edf2c4082c6e7a029a99317fd10c39dd7c40c7ff"
+source = "git+https://github.com/Firestar99/spirt?rev=32434e6565a20607ed3231b52c744cc685a33dfd#32434e6565a20607ed3231b52c744cc685a33dfd"
 dependencies = [
  "arrayvec",
  "bytemuck",
