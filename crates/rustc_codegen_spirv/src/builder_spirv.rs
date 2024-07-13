@@ -4,7 +4,7 @@ use crate::spirv_type::SpirvType;
 use crate::symbols::Symbols;
 use crate::target::SpirvTarget;
 use crate::target_feature::TargetFeature;
-use rspirv::dr::{Block, Builder, Module, Operand};
+use rspirv::dr::{Block, Builder, Instruction, Module, Operand};
 use rspirv::spirv::{
     AddressingModel, Capability, MemoryModel, Op, SourceLanguage, StorageClass, Word,
 };
@@ -93,7 +93,7 @@ impl SpirvValue {
         match self.kind {
             SpirvValueKind::Def(id) | SpirvValueKind::IllegalConst(id) => {
                 let &entry = cx.builder.id_to_const.borrow().get(&id)?;
-                match entry.val {
+                match entry.val.val {
                     SpirvConst::PtrTo { pointee } => {
                         let ty = match cx.lookup_type(self.ty) {
                             SpirvType::Pointer { pointee } => pointee,
@@ -144,7 +144,7 @@ impl SpirvValue {
                         if let (
                             LeafIllegalConst::CompositeContainsPtrTo,
                             SpirvConst::Composite(_fields),
-                        ) = (cause, &entry.val)
+                        ) = (cause, &entry.val.val)
                         {
                             // FIXME(eddyb) materialize this at runtime, using
                             // `OpCompositeConstruct` (transitively, i.e. after
@@ -161,7 +161,23 @@ impl SpirvValue {
                     IllegalConst::Indirect(cause) => cause.message(),
                 };
 
-                cx.zombie_with_span(id, span, msg);
+                if let Err(IllegalConst::Shallow(LeafIllegalConst::BitCast { from_ty })) =
+                    entry.legal
+                {
+                    cx.zombie_with_span(
+                        id,
+                        span,
+                        &format!(
+                            "{msg}\
+                            \nfrom `{}`\
+                            \n  to `{}`",
+                            cx.debug_type(from_ty),
+                            cx.debug_type(self.ty)
+                        ),
+                    );
+                } else {
+                    cx.zombie_with_span(id, span, msg);
+                }
 
                 id
             }
@@ -257,6 +273,9 @@ pub enum SpirvConst<'a, 'tcx> {
     //
     // FIXME(eddyb) replace this with `qptr` handling of constant data.
     ConstDataFromAlloc(ConstAllocation<'tcx>),
+
+    // HACK(eddyb) using `OpSpecConstantOp`+`OpBitcast` for illegal constants.
+    BitCast(Word),
 }
 
 impl<'tcx> SpirvConst<'_, 'tcx> {
@@ -291,11 +310,13 @@ impl<'tcx> SpirvConst<'_, 'tcx> {
             SpirvConst::Composite(fields) => SpirvConst::Composite(arena_alloc_slice(cx, fields)),
 
             SpirvConst::ConstDataFromAlloc(alloc) => SpirvConst::ConstDataFromAlloc(alloc),
+
+            SpirvConst::BitCast(v) => SpirvConst::BitCast(v),
         }
     }
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 struct WithType<V> {
     ty: Word,
     val: V,
@@ -315,6 +336,11 @@ enum LeafIllegalConst {
     //
     // FIXME(eddyb) replace this with `qptr` handling of constant data.
     UntypedConstDataFromAlloc,
+
+    /// `SpirvConst::BitCast`, materialized to SPIR-V but still needs to error.
+    //
+    // FIXME(eddyb) replace this with `qptr` handling of constant data/exprs.
+    BitCast { from_ty: Word },
 }
 
 impl LeafIllegalConst {
@@ -327,6 +353,7 @@ impl LeafIllegalConst {
                 "`const_data_from_alloc` result wasn't passed through `static_addr_of`, \
                  then `const_bitcast` (which would've given it a type)"
             }
+            Self::BitCast { .. } => "constants cannot contain bitcasts",
         }
     }
 }
@@ -426,10 +453,12 @@ pub struct BuilderSpirv<'tcx> {
 
     // Bidirectional maps between `SpirvConst` and the ID of the defined global
     // (e.g. `OpConstant...`) instruction.
-    // NOTE(eddyb) both maps have `WithConstLegality` around their keys, which
+    // NOTE(eddyb) both maps have `WithConstLegality` around their values, which
     // allows getting that legality information without additional lookups.
+    // FIXME(eddyb) replace `WithType<SpirvConst<'tcx, 'tcx>>` with a `struct`,
+    // and always have the type kept alongside the `enum SpirvConst` value.
     const_to_id: RefCell<FxHashMap<WithType<SpirvConst<'tcx, 'tcx>>, WithConstLegality<Word>>>,
-    id_to_const: RefCell<FxHashMap<Word, WithConstLegality<SpirvConst<'tcx, 'tcx>>>>,
+    id_to_const: RefCell<FxHashMap<Word, WithConstLegality<WithType<SpirvConst<'tcx, 'tcx>>>>>,
 
     debug_file_cache: RefCell<FxHashMap<DebugFileKey, DebugFileSpirv<'tcx>>>,
 
@@ -608,6 +637,23 @@ impl<'tcx> BuilderSpirv<'tcx> {
             SpirvConst::PtrTo { pointee } => {
                 builder.variable(ty, None, StorageClass::Private, Some(pointee))
             }
+
+            SpirvConst::BitCast(v) => {
+                let id = builder.id();
+                builder
+                    .module_mut()
+                    .types_global_values
+                    .push(Instruction::new(
+                        Op::SpecConstantOp,
+                        Some(ty),
+                        Some(id),
+                        vec![
+                            Operand::LiteralSpecConstantOpInteger(Op::Bitcast),
+                            Operand::IdRef(v),
+                        ],
+                    ));
+                id
+            }
         };
         #[allow(clippy::match_same_arms)]
         let legal = match val {
@@ -641,7 +687,7 @@ impl<'tcx> BuilderSpirv<'tcx> {
                     field_entry.legal.and(
                         // `field` is itself some legal `SpirvConst`, but can we have
                         // it as part of an `OpConstantComposite`?
-                        match field_entry.val {
+                        match field_entry.val.val {
                             SpirvConst::PtrTo { .. } => Err(IllegalConst::Shallow(
                                 LeafIllegalConst::CompositeContainsPtrTo,
                             )),
@@ -681,6 +727,10 @@ impl<'tcx> BuilderSpirv<'tcx> {
             SpirvConst::ConstDataFromAlloc(_) => Err(IllegalConst::Shallow(
                 LeafIllegalConst::UntypedConstDataFromAlloc,
             )),
+
+            SpirvConst::BitCast(from_id) => Err(IllegalConst::Shallow(LeafIllegalConst::BitCast {
+                from_ty: self.id_to_const.borrow()[&from_id].val.ty,
+            })),
         };
         let val = val.tcx_arena_alloc_slices(cx);
         assert_matches!(
@@ -690,9 +740,13 @@ impl<'tcx> BuilderSpirv<'tcx> {
             None
         );
         assert_matches!(
-            self.id_to_const
-                .borrow_mut()
-                .insert(id, WithConstLegality { val, legal }),
+            self.id_to_const.borrow_mut().insert(
+                id,
+                WithConstLegality {
+                    val: WithType { ty, val },
+                    legal
+                }
+            ),
             None
         );
         // FIXME(eddyb) deduplicate this `if`-`else` and its other copies.
@@ -705,7 +759,7 @@ impl<'tcx> BuilderSpirv<'tcx> {
     }
 
     pub fn lookup_const_by_id(&self, id: Word) -> Option<SpirvConst<'tcx, 'tcx>> {
-        Some(self.id_to_const.borrow().get(&id)?.val)
+        Some(self.id_to_const.borrow().get(&id)?.val.val)
     }
 
     pub fn lookup_const(&self, def: SpirvValue) -> Option<SpirvConst<'tcx, 'tcx>> {
