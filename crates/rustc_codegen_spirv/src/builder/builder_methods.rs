@@ -720,7 +720,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         let non_zero_ptr_base_index =
             ptr_base_index.filter(|&idx| self.builder.lookup_const_u64(idx) != Some(0));
         if let Some(ptr_base_index) = non_zero_ptr_base_index {
-            let result = if is_inbounds {
+            if is_inbounds {
                 emit.in_bounds_ptr_access_chain(
                     result_type,
                     None,
@@ -737,9 +737,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     indices,
                 )
             }
-            .unwrap();
-            self.zombie(result, "cannot offset a pointer to an arbitrary element");
-            result
+            .unwrap()
         } else {
             if is_inbounds {
                 emit.in_bounds_access_chain(result_type, None, pointer, indices)

@@ -208,21 +208,7 @@ impl SpirvValue {
                 original_ptr: _,
                 original_ptr_ty,
                 bitcast_result_id,
-            } => {
-                cx.zombie_with_span(
-                    bitcast_result_id,
-                    span,
-                    &format!(
-                        "cannot cast between pointer types\
-                         \nfrom `{}`\
-                         \n  to `{}`",
-                        cx.debug_type(original_ptr_ty),
-                        cx.debug_type(self.ty)
-                    ),
-                );
-
-                bitcast_result_id
-            }
+            } => bitcast_result_id,
         }
     }
 }
