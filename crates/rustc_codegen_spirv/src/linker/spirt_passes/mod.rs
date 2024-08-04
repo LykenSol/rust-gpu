@@ -148,7 +148,19 @@ pub(super) fn run_func_passes<P>(
             after_pass("qptr::lower_from_spv_ptrs", module, profiler);
 
             let profiler = before_pass("qptr::partition_and_propagate", module);
+            let mut iterations = 0;
+            let start = std::time::Instant::now();
             loop {
+                if iterations >= 100 {
+                    // FIXME(eddyb) maybe attach a SPIR-T diagnostic instead?
+                    eprintln!(
+                        "[WARNING] qptr::partition_and_propagate: giving up on fixpoint after {iterations} iterations (took {:?})",
+                        start.elapsed()
+                    );
+                    break;
+                }
+                iterations += 1;
+
                 spirt::passes::qptr::partition_and_propagate(module, layout_config);
                 // HACK(eddyb) `partition_and_propagate` can create inputs/outputs
                 // into/from control regions/nodes, that aren't actually needed,

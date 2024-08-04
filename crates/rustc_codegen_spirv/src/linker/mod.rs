@@ -578,11 +578,15 @@ pub fn link(
             after_pass("structurize_func_cfgs", module, Some(timer));
         }
 
-        if !opts.spirt_passes.is_empty() {
+        let mut spirt_passes = opts.spirt_passes.clone();
+        if !opts.infer_storage_classes {
+            spirt_passes.insert(0, "qptr".into());
+        }
+        if !spirt_passes.is_empty() {
             // FIXME(eddyb) why does this focus on functions, it could just be module passes??
             spirt_passes::run_func_passes(
                 module,
-                &opts.spirt_passes,
+                &spirt_passes,
                 |name, _module| before_pass(name),
                 |name, module, timer| after_pass(name, module, Some(timer)),
             );
