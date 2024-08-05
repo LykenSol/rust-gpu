@@ -6,7 +6,9 @@ use crate::rustc_codegen_ssa::traits::BaseTypeMethods;
 use crate::spirv_type::SpirvType;
 use itertools::Itertools;
 use rspirv::dr::{InsertPoint, Instruction, Operand};
-use rspirv::spirv::{Capability, MemoryModel, MemorySemantics, Op, Scope, StorageClass, Word};
+use rspirv::spirv::{
+    Capability, MemoryAccess, MemoryModel, MemorySemantics, Op, Scope, StorageClass, Word,
+};
 use rustc_apfloat::{ieee, Float, Round, Status};
 use rustc_codegen_ssa::common::{
     AtomicOrdering, AtomicRmwBinOp, IntPredicate, RealPredicate, SynchronizationScope, TypeKind,
@@ -1419,10 +1421,19 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
     }
 
     fn volatile_load(&mut self, ty: Self::Type, ptr: Self::Value) -> Self::Value {
-        // TODO: Implement this
-        let result = self.load(ty, ptr, Align::from_bytes(0).unwrap());
-        self.zombie(result.def(self), "volatile load is not supported yet");
-        result
+        let (ptr, access_ty) = self.adjust_pointer_for_typed_access(ptr, ty);
+        let loaded_val = self
+            .emit()
+            .load(
+                access_ty,
+                None,
+                ptr.def(self),
+                Some(MemoryAccess::VOLATILE),
+                empty(),
+            )
+            .unwrap()
+            .with_type(access_ty);
+        self.bitcast(loaded_val, ty)
     }
 
     fn atomic_load(
@@ -2802,12 +2813,16 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                         kind: SpirvValueKind::Def(b_id),
                         ..
                     },
-                    _, // `&'static panic::Location<'static>`
+                    ref other_args @ ..,
                 ] = args[..]
                 {
-                    if let Some(const_msg) = const_str_as_utf8(&[a_id, b_id]) {
-                        decoded_format_args.const_pieces = Some([const_msg].into_iter().collect());
-                        return Ok(decoded_format_args);
+                    // Optional `&'static panic::Location<'static>`.
+                    if other_args.len() <= 1 {
+                        if let Some(const_msg) = const_str_as_utf8(&[a_id, b_id]) {
+                            decoded_format_args.const_pieces =
+                                Some([const_msg].into_iter().collect());
+                            return Ok(decoded_format_args);
+                        }
                     }
                 }
 
@@ -2817,6 +2832,16 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                             kind: SpirvValueKind::Def(format_args_id),
                             ..
                         },
+                        _, // `&'static panic::Location<'static>`
+                    ] => format_args_id,
+
+                    // HACK(eddyb) `panic_nounwind_fmt` takes an extra argument.
+                    &[
+                        SpirvValue {
+                            kind: SpirvValueKind::Def(format_args_id),
+                            ..
+                        },
+                        _, // `force_no_backtrace: bool`
                         _, // `&'static panic::Location<'static>`
                     ] => format_args_id,
 
