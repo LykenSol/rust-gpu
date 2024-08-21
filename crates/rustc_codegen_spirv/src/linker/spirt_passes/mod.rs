@@ -14,11 +14,13 @@ use spirt::qptr::QPtrOp;
 use spirt::transform::InnerInPlaceTransform;
 use spirt::visit::{InnerVisit, Visitor};
 use spirt::{
-    spv, AttrSet, Const, Context, ControlNode, ControlNodeKind, ControlRegion, DataInstDef,
-    DataInstForm, DataInstFormDef, DataInstKind, DeclDef, EntityOrientedDenseMap, Func,
-    FuncDefBody, GlobalVar, Module, Type, Value,
+    spv, AttrSet, Const, ConstDef, ConstKind, Context, ControlNode, ControlNodeDef,
+    ControlNodeKind, ControlRegion, DataInstDef, DataInstForm, DataInstFormDef, DataInstKind,
+    DeclDef, EntityList, EntityOrientedDenseMap, Func, FuncDefBody, GlobalVar, Module, Type,
+    TypeKind, Value,
 };
 use std::collections::VecDeque;
+use std::num::NonZeroU32;
 use std::{iter, str};
 
 // HACK(eddyb) `spv::spec::Spec` with extra `WellKnown`s (that should be upstreamed).
@@ -109,7 +111,7 @@ def_spv_spec_with_extra_well_known! {
     ],
 }
 
-const QPTR_LAYOUT_CONFIG: &spirt::qptr::LayoutConfig = &spirt::qptr::LayoutConfig {
+const QPTR_LAYOUT_CONFIG: spirt::qptr::LayoutConfig = spirt::qptr::LayoutConfig {
     abstract_bool_size_align: (1, 1),
     logical_ptr_size_align: (4, 4),
     ..spirt::qptr::LayoutConfig::VULKAN_SCALAR_LAYOUT
@@ -162,9 +164,104 @@ pub(super) fn run_func_passes<P>(
         let name = name.as_ref();
 
         // HACK(eddyb) not really a function pass.
+        if name == "emulate_call_stack" {
+            let can_use_debug_printf = match &module.dialect {
+                spirt::ModuleDialect::Spv(dialect) => {
+                    dialect.extensions.contains("SPV_KHR_non_semantic_info")
+                }
+            };
+
+            let profiler = before_pass("emulate_call_stack", module);
+            spirt::passes::legalize::emulate_call_stack(
+                module,
+                &spirt::callgraph::CallStackEmuConfig {
+                    layout_config: QPTR_LAYOUT_CONFIG,
+                    stack_unit_bytes: NonZeroU32::new(4).unwrap(),
+                    stack_size_bytes: 1024,
+                    build_fatal_error: Box::new(move |msg, cx, func_at_region| {
+                        let wk = &spv::spec::Spec::get().well_known;
+
+                        // FIXME(eddyb) implement properly, by lowering to Rust-GPU's
+                        // abort instruction and then having that converted elsewhere.
+                        let region = func_at_region.position;
+                        let func = func_at_region.at(());
+                        if can_use_debug_printf {
+                            let inst = func.data_insts.define(
+                                cx,
+                                DataInstDef {
+                                    attrs: AttrSet::default(),
+                                    form: cx.intern(DataInstFormDef {
+                                        kind: DataInstKind::SpvExtInst {
+                                            ext_set: cx.intern("NonSemantic.DebugPrintf"),
+                                            inst: 1,
+                                            lowering: Default::default(),
+                                        },
+                                        output_types: [cx.intern(TypeKind::SpvInst {
+                                            spv_inst: wk.OpTypeVoid.into(),
+                                            type_and_const_inputs: Default::default(),
+                                            value_lowering: Default::default(),
+                                        })]
+                                        .into_iter()
+                                        .collect(),
+                                    }),
+                                    inputs: [Value::Const(cx.intern(ConstDef {
+                                        attrs: Default::default(),
+                                        ty: cx.intern(TypeKind::SpvStringLiteralForExtInst),
+                                        kind: ConstKind::SpvStringLiteralForExtInst(cx.intern(
+                                            format!("FATAL: {msg} (from emulated recursion)\n"),
+                                        )),
+                                    }))]
+                                    .into_iter()
+                                    .collect(),
+                                }
+                                .into(),
+                            );
+                            let mut insts = EntityList::empty();
+                            insts.insert_last(inst, func.data_insts);
+
+                            let block = func.control_nodes.define(
+                                cx,
+                                ControlNodeDef {
+                                    attrs: AttrSet::default(),
+                                    kind: ControlNodeKind::Block { insts },
+                                    outputs: [].into_iter().collect(),
+                                }
+                                .into(),
+                            );
+                            func.control_regions[region]
+                                .children
+                                .insert_last(block, func.control_nodes);
+                        }
+                        if true {
+                            let exit_node = func.control_nodes.define(
+                                cx,
+                                ControlNodeDef {
+                                    attrs: AttrSet::default(),
+                                    kind: ControlNodeKind::ExitInvocation {
+                                        kind: spirt::cfg::ExitInvocationKind::SpvInst(
+                                            wk.OpReturn.into(),
+                                        ),
+                                        inputs: [].into_iter().collect(),
+                                    },
+                                    outputs: [].into_iter().collect(),
+                                }
+                                .into(),
+                            );
+                            func.control_regions[region]
+                                .children
+                                .insert_last(exit_node, func.control_nodes);
+                        }
+                    }),
+                },
+            );
+            after_pass("emulate_call_stack", module, profiler);
+            continue;
+        }
+
+        // HACK(eddyb) not really a function pass.
         if name == "qptr" {
             let profiler = before_pass("qptr::lower_from_spv_ptrs", module);
-            spirt::passes::qptr::lower_from_spv_ptrs(module, QPTR_LAYOUT_CONFIG);
+            spirt::passes::qptr::lower_from_spv_ptrs(module, &QPTR_LAYOUT_CONFIG);
             after_pass("qptr::lower_from_spv_ptrs", module, profiler);
 
             let profiler = before_pass("qptr::partition_and_propagate", module);
@@ -182,7 +279,7 @@ pub(super) fn run_func_passes<P>(
                 }
                 iterations += 1;
 
-                spirt::passes::qptr::partition_and_propagate(module, QPTR_LAYOUT_CONFIG);
+                spirt::passes::qptr::partition_and_propagate(module, &QPTR_LAYOUT_CONFIG);
                 // HACK(eddyb) `partition_and_propagate` can create inputs/outputs
                 // into/from control regions/nodes, that aren't actually needed,
                 // so this is a stop-gap solution to prevent many spurious phis, but
@@ -232,11 +329,11 @@ pub(super) fn run_func_passes<P>(
     // "lifting `qptr` back to `OpTypePointer`s" and "lifting SPIR-T to SPIR-V".
     if needs_qptr_lifting {
         let profiler = before_pass("qptr::analyze_uses", module);
-        spirt::passes::qptr::analyze_uses(module, QPTR_LAYOUT_CONFIG);
+        spirt::passes::qptr::analyze_uses(module, &QPTR_LAYOUT_CONFIG);
         after_pass("qptr::analyze_uses", module, profiler);
 
         let profiler = before_pass("qptr::lift_to_spv_ptrs", module);
-        spirt::passes::qptr::lift_to_spv_ptrs(module, QPTR_LAYOUT_CONFIG);
+        spirt::passes::qptr::lift_to_spv_ptrs(module, &QPTR_LAYOUT_CONFIG);
         after_pass("qptr::lift_to_spv_ptrs", module, profiler);
     }
 }

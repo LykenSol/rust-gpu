@@ -27,9 +27,6 @@ fn next_id(header: &mut ModuleHeader) -> Word {
 }
 
 pub fn inline(sess: &Session, module: &mut Module) -> super::Result<()> {
-    // This algorithm gets real sad if there's recursion - but, good news, SPIR-V bans recursion
-    deny_recursion_in_module(sess, module)?;
-
     // Compute the call-graph that will drive (inside-out, aka bottom-up) inlining.
     let (call_graph, func_id_to_idx) = CallGraph::collect_with_func_id_to_idx(module);
 
@@ -126,6 +123,7 @@ pub fn inline(sess: &Session, module: &mut Module) -> super::Result<()> {
             .collect(),
 
         inlined_dont_inlines_to_cause_and_callers: FxIndexMap::default(),
+        skipped_recursive_inlines: FxIndexSet::default(),
     };
 
     let mut functions: Vec<_> = mem::take(&mut module.functions)
@@ -147,6 +145,7 @@ pub fn inline(sess: &Session, module: &mut Module) -> super::Result<()> {
     let Inliner {
         id_to_name,
         inlined_dont_inlines_to_cause_and_callers,
+        skipped_recursive_inlines,
         ..
     } = inliner;
 
@@ -190,91 +189,23 @@ pub fn inline(sess: &Session, module: &mut Module) -> super::Result<()> {
             ))
             .emit();
     }
+    // FIXME(eddyb) better diagnostics for this!
+    for callee_id in skipped_recursive_inlines {
+        let callee_name = get_name(&id_to_name, callee_id);
+
+        let callee_span = span_regen
+            .src_loc_for_id(callee_id)
+            .and_then(|src_loc| span_regen.src_loc_to_rustc(src_loc))
+            .unwrap_or_default();
+        sess.dcx()
+            .struct_span_warn(
+                callee_span,
+                format!("cannot inline calls to `{callee_name}` due to recursion"),
+            )
+            .emit();
+    }
 
     Ok(())
-}
-
-// https://stackoverflow.com/a/53995651
-fn deny_recursion_in_module(sess: &Session, module: &Module) -> super::Result<()> {
-    let func_to_index: FxHashMap<Word, usize> = module
-        .functions
-        .iter()
-        .enumerate()
-        .map(|(index, func)| (func.def_id().unwrap(), index))
-        .collect();
-    let mut discovered = vec![false; module.functions.len()];
-    let mut finished = vec![false; module.functions.len()];
-    let mut has_recursion = None;
-    for index in 0..module.functions.len() {
-        if !discovered[index] && !finished[index] {
-            visit(
-                sess,
-                module,
-                index,
-                &mut discovered,
-                &mut finished,
-                &mut has_recursion,
-                &func_to_index,
-            );
-        }
-    }
-
-    fn visit(
-        sess: &Session,
-        module: &Module,
-        current: usize,
-        discovered: &mut Vec<bool>,
-        finished: &mut Vec<bool>,
-        has_recursion: &mut Option<ErrorGuaranteed>,
-        func_to_index: &FxHashMap<Word, usize>,
-    ) {
-        discovered[current] = true;
-
-        for next in calls(&module.functions[current], func_to_index) {
-            if discovered[next] {
-                let names = get_names(module);
-                let current_name = get_name(&names, module.functions[current].def_id().unwrap());
-                let next_name = get_name(&names, module.functions[next].def_id().unwrap());
-                *has_recursion = Some(sess.dcx().err(format!(
-                    "module has recursion, which is not allowed: `{current_name}` calls `{next_name}`"
-                )));
-                break;
-            }
-
-            if !finished[next] {
-                visit(
-                    sess,
-                    module,
-                    next,
-                    discovered,
-                    finished,
-                    has_recursion,
-                    func_to_index,
-                );
-            }
-        }
-
-        discovered[current] = false;
-        finished[current] = true;
-    }
-
-    fn calls<'a>(
-        func: &'a Function,
-        func_to_index: &'a FxHashMap<Word, usize>,
-    ) -> impl Iterator<Item = usize> + 'a {
-        func.all_inst_iter()
-            .filter(|inst| inst.class.opcode == Op::FunctionCall)
-            .map(move |inst| {
-                *func_to_index
-                    .get(&inst.operands[0].id_ref_any().unwrap())
-                    .unwrap()
-            })
-    }
-
-    match has_recursion {
-        Some(err) => Err(err),
-        None => Ok(()),
-    }
 }
 
 /// Any type/const/global variable, which is "legal" (i.e. can be kept in SPIR-V).
@@ -496,6 +427,7 @@ struct Inliner<'a, 'b> {
     legal_globals: FxHashMap<Word, LegalGlobal>,
     functions_that_may_abort: FxHashSet<Word>,
     inlined_dont_inlines_to_cause_and_callers: FxIndexMap<Word, (&'static str, FxIndexSet<Word>)>,
+    skipped_recursive_inlines: FxIndexSet<Word>,
     // rewrite_rules: FxHashMap<Word, Word>,
 }
 
@@ -550,38 +482,49 @@ impl Inliner<'_, '_> {
             .iter()
             .enumerate()
             .filter(|(_, inst)| inst.class.opcode == Op::FunctionCall)
-            .filter_map(|(index, inst)| {
-                Some((
-                    index,
-                    inst,
-                    functions[*self
-                        .func_id_to_idx
-                        .get(&inst.operands[0].id_ref_any().unwrap())?]
-                    .as_ref()
-                    .unwrap(),
-                ))
-            })
-            .find(|(_, inst, f)| {
+            .find_map(|(index, inst)| {
+                let callee_def_id = inst.operands[0].id_ref_any().unwrap();
+                let maybe_callee = &functions[*self.func_id_to_idx.get(&callee_def_id)?];
+                let callee = match maybe_callee {
+                    Ok(callee) => callee,
+
+                    // HACK(eddyb) this assumes functions are inlined one by one,
+                    // i.e. this is self-recursion (checked by the assert below).
+                    Err(FuncIsBeingInlined) => caller,
+                };
+                assert_eq!(callee.def_id().unwrap(), callee_def_id);
+
                 let call_site = CallSite {
                     caller,
                     call_inst: inst,
                 };
-                match should_inline(
+                let should_or_must_inline = should_inline(
                     &self.legal_globals,
                     &self.functions_that_may_abort,
-                    f,
+                    callee,
                     call_site,
-                ) {
-                    Ok(inline) => inline,
-                    Err(MustInlineToLegalize(cause)) => {
-                        if has_dont_inline(f) {
-                            self.inlined_dont_inlines_to_cause_and_callers
-                                .entry(f.def_id().unwrap())
-                                .or_insert_with(|| (cause, Default::default()))
-                                .1
-                                .insert(caller.def_id().unwrap());
+                )
+                .unwrap_or_else(|MustInlineToLegalize(cause)| {
+                    if has_dont_inline(callee) {
+                        self.inlined_dont_inlines_to_cause_and_callers
+                            .entry(callee_def_id)
+                            .or_insert_with(|| (cause, Default::default()))
+                            .1
+                            .insert(caller.def_id().unwrap());
+                    }
+                    true
+                });
+
+                // HACK(eddyb) this match is repeated to avoid borrowing `caller`
+                // through the returned `callee` (and also we don't *actually*
+                // want to accidentally allow inlining recursive calls, anyway).
+                match maybe_callee {
+                    Ok(callee) => should_or_must_inline.then_some((index, inst, callee)),
+                    Err(FuncIsBeingInlined) => {
+                        if should_or_must_inline {
+                            self.skipped_recursive_inlines.insert(callee_def_id);
                         }
-                        true
+                        None
                     }
                 }
             });
