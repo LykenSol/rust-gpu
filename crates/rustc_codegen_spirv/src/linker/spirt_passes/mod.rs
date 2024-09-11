@@ -352,13 +352,17 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                         control_node,
                         output_idx,
                     } => {
-                        let cases = match &func.at(control_node).def().kind {
-                            ControlNodeKind::Select { cases, .. } => cases,
-                            // NOTE(eddyb) only `Select`s can have outputs right now.
+                        match &func.at(control_node).def().kind {
+                            ControlNodeKind::Select { cases, .. } => {
+                                for &case in cases {
+                                    self.mark_used(
+                                        func.at(case).def().outputs[output_idx as usize],
+                                    );
+                                }
+                            }
+                            ControlNodeKind::FuncCall { .. } => {}
+                            // NOTE(eddyb) only `Select`s and `FuncCall`s can have outputs right now.
                             _ => unreachable!(),
-                        };
-                        for &case in cases {
-                            self.mark_used(func.at(case).def().outputs[output_idx as usize]);
                         }
                     }
                     Value::DataInstOutput(inst) => {
@@ -437,7 +441,6 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                                     }
 
                                     DataInstKind::QPtr(QPtrOp::Load | QPtrOp::Store)
-                                    | DataInstKind::FuncCall(_)
                                     | DataInstKind::SpvExtInst { .. } => false,
                                 };
                                 if !is_pure {
@@ -454,7 +457,8 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                             ..
                         } => mark_used_and_propagate(v),
 
-                        ControlNodeKind::ExitInvocation {
+                        ControlNodeKind::FuncCall { callee: _, inputs }
+                        | ControlNodeKind::ExitInvocation {
                             kind: spirt::cfg::ExitInvocationKind::SpvInst(_),
                             inputs,
                         } => {
@@ -598,7 +602,7 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                 }
             }
 
-            ControlNodeKind::ExitInvocation { .. } => {}
+            ControlNodeKind::FuncCall { .. } | ControlNodeKind::ExitInvocation { .. } => {}
         }
     }
 

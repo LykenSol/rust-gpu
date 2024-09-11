@@ -4,10 +4,12 @@ use rustc_errors::EmissionGuarantee;
 use rustc_session::Session;
 use rustc_span::Span;
 use smallvec::SmallVec;
+use spirt::func_at::FuncAt;
 use spirt::visit::{InnerVisit, Visitor};
 use spirt::{
-    spv, Attr, AttrSet, Const, ConstKind, Context, DataInstDef, DataInstForm, DataInstKind,
-    DbgSrcLoc, Diag, DiagLevel, ExportKey, Exportee, Func, GlobalVar, InternedStr, Module, Type,
+    spv, Attr, AttrSet, Const, ConstKind, Context, ControlNode, ControlNodeKind, DataInstDef,
+    DataInstForm, DbgSrcLoc, Diag, DiagLevel, ExportKey, Exportee, Func, GlobalVar, InternedStr,
+    Module, Type,
 };
 use std::{mem, str};
 
@@ -410,25 +412,36 @@ impl<'a> Visitor<'a> for DiagnosticReporter<'a> {
         }
     }
 
-    fn visit_data_inst_def(&mut self, data_inst_def: &'a DataInstDef) {
-        let replace_origin = |this: &mut Self, new_origin| match this.use_stack.last_mut() {
-            Some(UseOrigin::IntraFunc { origin, .. }) => mem::replace(origin, new_origin),
+    fn visit_control_node_def(&mut self, func_at_control_node: FuncAt<'a, ControlNode>) {
+        match self.use_stack.last_mut() {
+            Some(UseOrigin::IntraFunc { inst_attrs, .. }) => {
+                *inst_attrs = func_at_control_node.def().attrs;
+            }
             _ => unreachable!(),
-        };
+        }
 
+        if let ControlNodeKind::FuncCall { callee, .. } = func_at_control_node.def().kind {
+            let replace_origin = |this: &mut Self, new_origin| match this.use_stack.last_mut() {
+                Some(UseOrigin::IntraFunc { origin, .. }) => mem::replace(origin, new_origin),
+                _ => unreachable!(),
+            };
+
+            // HACK(eddyb) visit `callee` early, to control its `use_stack`, with
+            // the later visit from `inner_visit_with` ignored as a duplicate.
+            let old_origin = replace_origin(self, IntraFuncUseOrigin::CallCallee);
+            self.visit_func_use(callee);
+            replace_origin(self, old_origin);
+        }
+
+        func_at_control_node.inner_visit_with(self);
+    }
+
+    fn visit_data_inst_def(&mut self, data_inst_def: &'a DataInstDef) {
         match self.use_stack.last_mut() {
             Some(UseOrigin::IntraFunc { inst_attrs, .. }) => {
                 *inst_attrs = data_inst_def.attrs;
             }
             _ => unreachable!(),
-        }
-
-        if let DataInstKind::FuncCall(func) = self.cx[data_inst_def.form].kind {
-            // HACK(eddyb) visit `func` early, to control its `use_stack`, with
-            // the later visit from `inner_visit_with` ignored as a duplicate.
-            let old_origin = replace_origin(self, IntraFuncUseOrigin::CallCallee);
-            self.visit_func_use(func);
-            replace_origin(self, old_origin);
         }
 
         data_inst_def.inner_visit_with(self);

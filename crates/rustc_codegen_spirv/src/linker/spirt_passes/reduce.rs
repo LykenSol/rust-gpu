@@ -157,7 +157,7 @@ pub(crate) fn reduce_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                 }
 
                 &ControlNodeDef {
-                    kind: ControlNodeKind::ExitInvocation { .. },
+                    kind: ControlNodeKind::FuncCall { .. } | ControlNodeKind::ExitInvocation { .. },
                     ..
                 } => {}
             };
@@ -281,7 +281,9 @@ impl ParentMap {
 
                     ControlNodeKind::Select { cases, .. } => cases,
                     ControlNodeKind::Loop { body, .. } => slice::from_ref(body),
-                    ControlNodeKind::ExitInvocation { .. } => &[][..],
+                    ControlNodeKind::FuncCall { .. } | ControlNodeKind::ExitInvocation { .. } => {
+                        &[][..]
+                    }
                 };
                 for &child_region in child_regions {
                     this.control_region_parent
@@ -809,7 +811,8 @@ impl Reducible {
             } => {
                 let cases = match &func.reborrow().at(control_node).def().kind {
                     ControlNodeKind::Select { cases, .. } => cases,
-                    // NOTE(eddyb) only `Select`s can have outputs right now.
+                    ControlNodeKind::FuncCall { .. } => return None,
+                    // NOTE(eddyb) only `Select`s and `FuncCall`s can have outputs right now.
                     _ => unreachable!(),
                 };
 
