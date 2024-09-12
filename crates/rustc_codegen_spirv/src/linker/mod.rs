@@ -62,7 +62,6 @@ pub struct Options {
     pub dump_post_inline: Option<PathBuf>,
     pub dump_post_split: Option<PathBuf>,
     pub dump_spirt_passes: Option<PathBuf>,
-    pub spirt_strip_custom_debuginfo_from_dumps: bool,
     pub spirt_keep_debug_sources_in_dumps: bool,
     pub spirt_keep_unstructured_cfg_in_dumps: bool,
     pub specializer_debug: bool,
@@ -158,9 +157,6 @@ fn get_name<'a>(names: &FxHashMap<Word, &'a str>, id: Word) -> Cow<'a, str> {
 impl Options {
     // FIXME(eddyb) using a method on this type seems a bit sketchy.
     fn spirt_cleanup_for_dumping(&self, module: &mut spirt::Module) {
-        if self.spirt_strip_custom_debuginfo_from_dumps {
-            spirt_passes::debuginfo::convert_custom_debuginfo_to_spv(module);
-        }
         if !self.spirt_keep_debug_sources_in_dumps {
             const DOTS: &str = "⋯";
             let dots_interned_str = module.cx().intern(DOTS);
@@ -201,22 +197,31 @@ pub fn link(
             spirv_tools::binary::from_binary(&spv_words).to_vec()
         };
 
-        // FIXME(eddyb) should've really been "spirt::Module::lower_from_spv_bytes".
-        let lower_from_spv_timer = sess.timer("spirt::Module::lower_from_spv_file");
         let cx = std::rc::Rc::new(spirt::Context::new());
         crate::custom_insts::register_to_spirt_context(&cx);
-        (
-            spv_words,
-            spirt::Module::lower_from_spv_bytes(cx, spv_bytes),
-            // HACK(eddyb) this is only returned for `SpirtDumpGuard`.
-            lower_from_spv_timer,
-        )
+
+        // FIXME(eddyb) should've really been "spirt::Module::lower_from_spv_bytes".
+        let mut module = {
+            let _timer = sess.timer("spirt::Module::lower_from_spv_file");
+            spirt::Module::lower_from_spv_bytes(cx, spv_bytes)
+        };
+
+        // Replace our custom debuginfo instructions as early as possible.
+        if let Ok(module) = &mut module {
+            let _timer = sess.timer(
+                "spirt_passes::debuginfo::convert_custom_decorations_and_debuginfo_to_spirt",
+            );
+            spirt_passes::debuginfo::convert_custom_decorations_and_debuginfo_to_spirt(
+                opts, module,
+            );
+        }
+
+        (spv_words, module)
     };
 
     // FIXME(eddyb) deduplicate with `SpirtDumpGuard`.
     let dump_spv_and_spirt = |spv_module: &Module, dump_file_path_stem: PathBuf| {
-        let (spv_words, spirt_module_or_err, _) =
-            spv_module_to_spv_words_and_spirt_module(spv_module);
+        let (spv_words, spirt_module_or_err) = spv_module_to_spv_words_and_spirt_module(spv_module);
         std::fs::write(
             dump_file_path_stem.with_extension("spv"),
             spirv_tools::binary::from_binary(&spv_words),
@@ -492,8 +497,7 @@ pub fn link(
 
     // NOTE(eddyb) SPIR-T pipeline is entirely limited to this block.
     {
-        let (spv_words, module_or_err, lower_from_spv_timer) =
-            spv_module_to_spv_words_and_spirt_module(&output);
+        let (spv_words, module_or_err) = spv_module_to_spv_words_and_spirt_module(&output);
         let module = &mut module_or_err.map_err(|e| {
             let spv_path = outputs.temp_path_ext("spirt-lower-from-spv-input.spv", None);
 
@@ -523,8 +527,8 @@ pub fn link(
         let module = &mut *dump_guard.module;
         // FIXME(eddyb) set the name into `dump_guard` to be able to access it on panic.
         let before_pass = |pass| sess.timer(pass);
-        let mut after_pass = |pass, module: &spirt::Module, timer| {
-            drop(timer);
+        let mut after_pass = |pass, module: &spirt::Module, maybe_timer| {
+            drop(maybe_timer);
             if opts.dump_spirt_passes.is_some() {
                 dump_guard
                     .per_pass_module_for_dumping
@@ -534,9 +538,7 @@ pub fn link(
         // HACK(eddyb) don't dump the unstructured state if not requested, as
         // after SPIR-T 0.4.0 it's extremely verbose (due to def-use hermeticity).
         if opts.spirt_keep_unstructured_cfg_in_dumps || !opts.structurize {
-            after_pass("lower_from_spv", module, lower_from_spv_timer);
-        } else {
-            drop(lower_from_spv_timer);
+            after_pass("lower_from_spv", module, None);
         }
 
         // NOTE(eddyb) this *must* run on unstructured CFGs, to do its job.
@@ -553,7 +555,7 @@ pub fn link(
         if opts.structurize {
             let timer = before_pass("spirt::legalize::structurize_func_cfgs");
             spirt::passes::legalize::structurize_func_cfgs(module);
-            after_pass("structurize_func_cfgs", module, timer);
+            after_pass("structurize_func_cfgs", module, Some(timer));
         }
 
         if !opts.spirt_passes.is_empty() {
@@ -562,13 +564,13 @@ pub fn link(
                 module,
                 &opts.spirt_passes,
                 |name, _module| before_pass(name),
-                |name, module, timer| after_pass(name, module, timer),
+                |name, module, timer| after_pass(name, module, Some(timer)),
             );
         }
 
         {
             let _timer = before_pass("spirt_passes::diagnostics::report_diagnostics");
-            spirt_passes::diagnostics::report_diagnostics(sess, opts, module).map_err(
+            spirt_passes::diagnostics::report_diagnostics(sess, module).map_err(
                 |spirt_passes::diagnostics::ReportedDiagnostics {
                      rustc_errors_guarantee,
                      any_errors_were_spirt_bugs,
@@ -577,12 +579,6 @@ pub fn link(
                     rustc_errors_guarantee
                 },
             )?;
-        }
-
-        // Replace our custom debuginfo instructions just before lifting to SPIR-V.
-        {
-            let _timer = before_pass("spirt_passes::debuginfo::convert_custom_debuginfo_to_spv");
-            spirt_passes::debuginfo::convert_custom_debuginfo_to_spv(module);
         }
 
         let spv_words = {

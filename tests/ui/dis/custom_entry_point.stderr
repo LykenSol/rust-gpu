@@ -12,3 +12,4 @@ OpExecutionMode %1 OriginUpperLeft
 OpName %3 "custom_entry_point::main"
 %4 = OpTypeVoid
 %5 = OpTypeFunction %4
+OpLine %2 13 7

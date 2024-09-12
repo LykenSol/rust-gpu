@@ -27,3 +27,5 @@ OpDecorate %6 DescriptorSet 0
 %6 = OpVariable  %13  UniformConstant
 %14 = OpTypeInt 32 0
 %15 = OpConstant  %14  1
+OpLine %2 46 7
+OpLine %2 19 3

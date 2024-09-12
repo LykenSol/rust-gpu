@@ -60,4 +60,4 @@ codegen-units = 256
 
 [patch.crates-io]
 # HACK(eddyb) temporary until branch gets merged (and/or SPIR-T 0.5.0 is released).
-spirt = { git = "https://github.com/LykenSol/spirt", branch = "vector" }
+spirt = { git = "https://github.com/LykenSol/spirt", branch = "dbg-attr" }

@@ -8,6 +8,7 @@ mod reduce;
 
 use lazy_static::lazy_static;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexSet};
+use smallvec::SmallVec;
 use spirt::func_at::FuncAt;
 use spirt::qptr::QPtrOp;
 use spirt::transform::InnerInPlaceTransform;
@@ -18,7 +19,7 @@ use spirt::{
     FuncDefBody, GlobalVar, Module, Type, Value,
 };
 use std::collections::VecDeque;
-use std::iter;
+use std::{iter, str};
 
 // HACK(eddyb) `spv::spec::Spec` with extra `WellKnown`s (that should be upstreamed).
 macro_rules! def_spv_spec_with_extra_well_known {
@@ -177,6 +178,26 @@ pub(super) fn run_func_passes<P>(
         }
         after_pass(full_name, module, profiler);
     }
+}
+
+fn decode_spv_lit_str_with<R>(imms: &[spv::Imm], f: impl FnOnce(&str) -> R) -> R {
+    let wk = &SpvSpecWithExtras::get().well_known;
+
+    // FIXME(eddyb) deduplicate with `spirt::spv::extract_literal_string`.
+    let words = imms.iter().enumerate().map(|(i, &imm)| match (i, imm) {
+        (0, spirt::spv::Imm::Short(k, w) | spirt::spv::Imm::LongStart(k, w))
+        | (1.., spirt::spv::Imm::LongCont(k, w)) => {
+            assert_eq!(k, wk.LiteralString);
+            w
+        }
+        _ => unreachable!(),
+    });
+    let bytes: SmallVec<[u8; 64]> = words
+        .flat_map(u32::to_le_bytes)
+        .take_while(|&byte| byte != 0)
+        .collect();
+
+    f(str::from_utf8(&bytes).expect("invalid UTF-8 in string literal"))
 }
 
 // FIXME(eddyb) this is just copy-pasted from `spirt` and should be reusable.
