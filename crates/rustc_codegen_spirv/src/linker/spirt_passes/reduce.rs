@@ -71,6 +71,7 @@ pub(crate) fn reduce_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                 }
 
                 ControlNodeDef {
+                    attrs: _,
                     kind:
                         ControlNodeKind::Select {
                             kind,
@@ -777,6 +778,7 @@ impl Reducible {
                         let new_block = func.control_nodes.define(
                             cx,
                             ControlNodeDef {
+                                attrs: Default::default(),
                                 kind: ControlNodeKind::Block {
                                     insts: Default::default(),
                                 },

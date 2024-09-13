@@ -2,14 +2,14 @@
 
 use crate::custom_decorations::{CustomDecoration, SrcLocDecoration, ZombieDecoration};
 use crate::custom_insts::{self, CustomInst, CustomOp};
-use either::Either;
+use itertools::Either;
 use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
 use smallvec::SmallVec;
 use spirt::func_at::FuncAtMut;
 use spirt::transform::{InnerInPlaceTransform as _, Transformed, Transformer};
 use spirt::visit::InnerVisit;
 use spirt::{
-    spv, Attr, AttrSet, AttrSetDef, Const, ConstKind, Context, ControlNode, ControlNodeKind,
+    spv, Attr, AttrSet, AttrSetDef, Const, ConstKind, Context, ControlNodeKind, ControlRegion,
     DataInstForm, DataInstKind, DbgSrcLoc, Diag, InternedStr, Module, Type, Value,
 };
 use std::marker::PhantomData;
@@ -208,17 +208,19 @@ impl Transformer for CustomDecorationsAndDebuginfoToSpirt<'_> {
         }
     }
 
-    fn in_place_transform_control_node_def(
+    fn in_place_transform_control_region_def(
         &mut self,
-        mut func_at_control_node: FuncAtMut<'_, ControlNode>,
+        mut func_at_region: FuncAtMut<'_, ControlRegion>,
     ) {
-        // HACK(eddyb) this relies on the fact that `ControlNodeKind::Block` maps
-        // to one original SPIR-V block, which may not necessarily be true, and
-        // steps should be taken elsewhere to explicitly unset debuginfo, instead
-        // of relying on the end of a SPIR-V block implicitly unsetting it all.
-        // NOTE(eddyb) allowing debuginfo to apply *outside* of a `Block` could
-        // be useful in allowing *some* structured control-flow to have debuginfo,
-        // but that would likely require more work on the SPIR-T side.
+        // HACK(eddyb) buffering the `DataInst`s to remove from this region's blocks,
+        // as iterating and modifying a list at the same time isn't supported.
+        let mut insts_to_remove = SmallVec::<[_; 8]>::new();
+
+        // HACK(eddyb) this relies on the fact that each original SPIR-V block
+        // can't be broken up into separate regions (at least for now), which
+        // may not necessarily always remain true, and steps should be taken
+        // elsewhere to explicitly unset debuginfo, instead of relying on the
+        // end of region implicitly unsetting it all (without too much leakage).
         let mut dbg_src_loc = None;
 
         // HACK(eddyb) only needed becasue `dbg_src_loc` can be `None`, but when
@@ -226,28 +228,47 @@ impl Transformer for CustomDecorationsAndDebuginfoToSpirt<'_> {
         // must have the same value as this variable.
         let mut inlined_callee_name_and_call_site = None;
 
-        if let ControlNodeKind::Block { mut insts } = func_at_control_node.reborrow().def().kind {
-            // HACK(eddyb) buffering the `DataInst`s to remove from this block,
-            // as iterating and modifying a list at the same time isn't supported.
-            let mut insts_to_remove = SmallVec::<[_; 8]>::new();
+        let mut children = func_at_region.reborrow().at_children().into_iter();
+        while let Some(mut func_at_control_node) = children.next() {
+            let control_node = func_at_control_node.position;
 
-            let mut func_at_inst_iter = func_at_control_node.reborrow().at(insts).into_iter();
-            while let Some(func_at_inst) = func_at_inst_iter.next() {
-                let inst = func_at_inst.position;
-                let data_inst_def = func_at_inst.def();
+            // HACK(eddyb) flatten only `Block`s (into their `DataInst`s).
+            let mut func_at_insts_or_node = match func_at_control_node.reborrow().def().kind {
+                ControlNodeKind::Block { insts } => {
+                    Either::Left(func_at_control_node.at(insts).into_iter())
+                }
+                _ => Either::Right([func_at_control_node].into_iter()),
+            };
+            loop {
+                let Some(mut func_at_inst_or_node) = func_at_insts_or_node
+                    .as_mut()
+                    .map_either(|it| it.next(), |it| it.next())
+                    .factor_none()
+                else {
+                    break;
+                };
 
                 // FIXME(eddyb) deduplicate with `spirt_passes::diagnostics`.
-                let maybe_custom_inst = match self.cx[data_inst_def.form].kind {
-                    DataInstKind::SpvExtInst {
-                        ext_set,
-                        inst: ext_inst,
-                    } if ext_set == self.custom_ext_inst_set => {
-                        Some(CustomOp::decode(ext_inst).with_operands(&data_inst_def.inputs))
-                    }
-                    _ => None,
-                };
+                let maybe_custom_inst =
+                    func_at_inst_or_node
+                        .as_mut()
+                        .left()
+                        .and_then(|func_at_inst| {
+                            let data_inst_def = func_at_inst.reborrow().freeze().def();
+                            match self.cx[data_inst_def.form].kind {
+                                DataInstKind::SpvExtInst {
+                                    ext_set,
+                                    inst: ext_inst,
+                                } if ext_set == self.custom_ext_inst_set => Some(
+                                    CustomOp::decode(ext_inst).with_operands(&data_inst_def.inputs),
+                                ),
+                                _ => None,
+                            }
+                        });
                 if let Some(custom_inst) = maybe_custom_inst {
-                    let mut mark_for_removal = || insts_to_remove.push(inst);
+                    let func_at_inst = func_at_inst_or_node.as_mut().left().unwrap().reborrow();
+                    let inst = func_at_inst.position;
+                    let mut mark_for_removal = || insts_to_remove.push((control_node, inst));
                     let expect_const = |v| match v {
                         Value::Const(ct) => ct,
                         _ => unreachable!(),
@@ -330,7 +351,7 @@ impl Transformer for CustomDecorationsAndDebuginfoToSpirt<'_> {
                                 mark_for_removal();
                                 continue;
                             } else {
-                                data_inst_def.attrs.push_diag(
+                                func_at_inst.def().attrs.push_diag(
                                     self.cx,
                                     Diag::bug([
                                         "`PopInlinedCallFrame` without matching `PushInlinedCallFrame`"
@@ -349,21 +370,25 @@ impl Transformer for CustomDecorationsAndDebuginfoToSpirt<'_> {
                     }
                 }
 
-                let attrs = &mut data_inst_def.attrs;
+                let attrs = func_at_inst_or_node
+                    .either(|fai| &mut fai.def().attrs, |facn| &mut facn.def().attrs);
 
                 // Set the equivalent `Attr::DbgSrcLoc` attribute.
                 if let Some(dbg_src_loc) = dbg_src_loc {
                     attrs.set_dbg_src_loc(self.cx, dbg_src_loc);
                 }
             }
-
-            // Finally remove the `DataInst`s buffered for removal earlier.
-            for inst in insts_to_remove {
-                insts.remove(inst, func_at_control_node.data_insts);
-            }
-            func_at_control_node.reborrow().def().kind = ControlNodeKind::Block { insts };
         }
 
-        func_at_control_node.inner_in_place_transform_with(self);
+        // Finally remove the `DataInst`s buffered for removal earlier.
+        let func = func_at_region.reborrow().at(());
+        for (parent_block, inst) in insts_to_remove {
+            match &mut func.control_nodes[parent_block].kind {
+                ControlNodeKind::Block { insts } => insts.remove(inst, func.data_insts),
+                _ => unreachable!(),
+            }
+        }
+
+        func_at_region.inner_in_place_transform_with(self);
     }
 }
