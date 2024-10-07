@@ -549,7 +549,7 @@ impl<'tcx> CodegenCx<'tcx> {
                 }
                 self.constant_composite(ty, values.into_iter())
             }
-            SpirvType::Array { element, count } => {
+            SpirvType::Array { element, count, .. } => {
                 let count = self.builder.lookup_const_u64(count).unwrap() as usize;
                 let values = (0..count).map(|_| {
                     self.read_from_const_alloc(alloc, offset, element)
@@ -587,7 +587,7 @@ impl<'tcx> CodegenCx<'tcx> {
                 *offset = final_offset;
                 result
             }
-            SpirvType::RuntimeArray { element } => {
+            SpirvType::RuntimeArray { element, .. } => {
                 let mut values = Vec::new();
                 while offset.bytes_usize() != alloc.inner().len() {
                     values.push(

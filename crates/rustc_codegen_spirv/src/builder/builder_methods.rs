@@ -223,7 +223,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 )
                 .def(self)
             }
-            SpirvType::Array { element, count } => {
+            SpirvType::Array {
+                element,
+                count,
+                stride: _,
+            } => {
                 let elem_pat = self.memset_const_pattern(&self.lookup_type(element), fill_byte);
                 let count = self.builder.lookup_const_u64(count).unwrap() as usize;
                 self.constant_composite(
@@ -267,7 +271,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 _ => self.fatal(format!("memset on float width {width} not implemented yet")),
             },
             SpirvType::Adt { .. } => self.fatal("memset on structs not implemented yet"),
-            SpirvType::Array { element, count } => {
+            SpirvType::Array {
+                element,
+                count,
+                stride: _,
+            } => {
                 let elem_pat = self.memset_dynamic_pattern(&self.lookup_type(element), fill_var);
                 let count = self.builder.lookup_const_u64(count).unwrap() as usize;
                 self.emit()
@@ -520,7 +528,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 }
                 SpirvType::Vector { element, .. }
                 | SpirvType::Array { element, .. }
-                | SpirvType::RuntimeArray { element }
+                | SpirvType::RuntimeArray { element, .. }
                 | SpirvType::Matrix { element, .. } => {
                     ty = element;
                     ty_kind = self.lookup_type(ty);
@@ -566,7 +574,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             .iter()
             .map(|index| {
                 result_pointee_type = match self.lookup_type(result_pointee_type) {
-                    SpirvType::Array { element, .. } | SpirvType::RuntimeArray { element } => {
+                    SpirvType::Array { element, .. } | SpirvType::RuntimeArray { element, .. } => {
                         element
                     }
                     _ => self.fatal(format!(

@@ -211,6 +211,7 @@ impl<'tcx> BaseTypeMethods<'tcx> for CodegenCx<'tcx> {
         SpirvType::Array {
             element: ty,
             count: self.const_usize(len),
+            stride: self.lookup_type(ty).sizeof(self).unwrap(),
         }
         .def(DUMMY_SP, self)
     }
