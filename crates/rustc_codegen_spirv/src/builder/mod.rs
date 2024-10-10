@@ -101,7 +101,7 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
 
     // HACK(eddyb) like the `CodegenCx` method but with `self.span()` awareness.
     pub fn type_ptr_to(&self, ty: Word) -> Word {
-        SpirvType::Pointer { pointee: ty }.def(self.span(), self)
+        SpirvType::Pointer { pointee: Some(ty) }.def(self.span(), self)
     }
 
     // TODO: Definitely add tests to make sure this impl is right.

@@ -105,6 +105,11 @@ impl SpirvValue {
                         } else {
                             SpirvValueKind::IllegalConst(pointee)
                         };
+
+                        // FIXME(eddyb) require passing a type in and/or get it
+                        // from the constant itself (maybe generate a bitcast?).
+                        let ty = ty?;
+
                         Some(SpirvValue { kind, ty })
                     }
                     _ => None,
