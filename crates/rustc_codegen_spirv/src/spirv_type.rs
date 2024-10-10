@@ -8,7 +8,7 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_middle::span_bug;
 use rustc_span::def_id::DefId;
 use rustc_span::{Span, Symbol};
-use rustc_target::abi::{Align, Size};
+use rustc_target::abi::{Align, Integer, Size};
 use std::cell::RefCell;
 use std::fmt;
 use std::iter;
@@ -90,6 +90,17 @@ pub enum SpirvType<'tcx> {
     RayQueryKhr,
 }
 
+// FIXME(eddyb) find a better place for this.
+pub(crate) fn integer_type_capability(i: Integer) -> Option<Capability> {
+    Some(match i {
+        Integer::I8 => Capability::Int8,
+        Integer::I16 => Capability::Int16,
+        Integer::I32 => return None,
+        Integer::I64 => Capability::Int64,
+        Integer::I128 => Capability::ArbitraryPrecisionIntegersINTEL,
+    })
+}
+
 impl SpirvType<'_> {
     /// Note: `Builder::type_*` should be called *nowhere else* but here, to ensure
     /// `CodegenCx::type_defs` stays up-to-date
@@ -104,29 +115,23 @@ impl SpirvType<'_> {
             Self::Integer(width, signedness) => {
                 let result = cx.emit_global().type_int_id(id, width, signedness as u32);
                 let u_or_i = if signedness { "i" } else { "u" };
-                match width {
-                    8 if !cx.builder.has_capability(Capability::Int8) => cx.zombie_with_span(
-                        result,
-                        def_span,
-                        &format!("`{u_or_i}8` without `OpCapability Int8`"),
-                    ),
-                    16 if !cx.builder.has_capability(Capability::Int16) => cx.zombie_with_span(
-                        result,
-                        def_span,
-                        &format!("`{u_or_i}16` without `OpCapability Int16`"),
-                    ),
-                    64 if !cx.builder.has_capability(Capability::Int64) => cx.zombie_with_span(
-                        result,
-                        def_span,
-                        &format!("`{u_or_i}64` without `OpCapability Int64`"),
-                    ),
-                    8 | 16 | 32 | 64 => {}
-                    w => cx.zombie_with_span(
-                        result,
-                        def_span,
-                        &format!("`{u_or_i}{w}` unsupported in SPIR-V"),
-                    ),
-                };
+
+                let valid = Integer::from_size(Size::from_bits(width))
+                    .map(integer_type_capability)
+                    .and_then(|cap| {
+                        if let Some(cap) = cap {
+                            if !cx.builder.has_capability(cap) {
+                                return Err(format!(
+                                    "`{u_or_i}{width}` without `OpCapability {cap:?}`"
+                                ));
+                            }
+                        }
+                        Ok(())
+                    });
+                if let Err(msg) = valid {
+                    cx.zombie_with_span(result, def_span, &msg);
+                }
+
                 result
             }
             Self::Float(width) => {
