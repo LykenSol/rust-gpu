@@ -209,10 +209,11 @@ pub fn check_fragment_insts(sess: &Session, module: &Module) -> Result<()> {
         let mut any_err = None;
         for inst in module.functions[index].all_inst_iter() {
             if inst.class.opcode == Op::FunctionCall {
-                let callee = func_id_to_idx[&inst.operands[0].unwrap_id_ref()];
-                let callee_had_err =
-                    visit(sess, module, visited, stack, names, callee, func_id_to_idx).err();
-                any_err = any_err.or(callee_had_err);
+                if let Some(&callee) = func_id_to_idx.get(&inst.operands[0].unwrap_id_ref()) {
+                    let callee_had_err =
+                        visit(sess, module, visited, stack, names, callee, func_id_to_idx).err();
+                    any_err = any_err.or(callee_had_err);
+                }
             }
             if matches!(
                 inst.class.opcode,

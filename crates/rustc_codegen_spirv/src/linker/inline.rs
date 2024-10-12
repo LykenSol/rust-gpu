@@ -550,14 +550,16 @@ impl Inliner<'_, '_> {
             .iter()
             .enumerate()
             .filter(|(_, inst)| inst.class.opcode == Op::FunctionCall)
-            .map(|(index, inst)| {
-                (
+            .filter_map(|(index, inst)| {
+                Some((
                     index,
                     inst,
-                    functions[self.func_id_to_idx[&inst.operands[0].id_ref_any().unwrap()]]
-                        .as_ref()
-                        .unwrap(),
-                )
+                    functions[*self
+                        .func_id_to_idx
+                        .get(&inst.operands[0].id_ref_any().unwrap())?]
+                    .as_ref()
+                    .unwrap(),
+                ))
             })
             .find(|(_, inst, f)| {
                 let call_site = CallSite {
