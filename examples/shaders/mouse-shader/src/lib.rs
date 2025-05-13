@@ -1,6 +1,6 @@
 #![cfg_attr(target_arch = "spirv", no_std)]
 // HACK(eddyb) can't easily see warnings otherwise from `spirv-builder` builds.
-#![deny(warnings)]
+//#![deny(warnings)]
 
 use core::f32::consts::PI;
 use glam::{Mat2, Vec2, Vec3, Vec4, Vec4Swizzles, vec2, vec3, vec4};
@@ -11,6 +11,8 @@ use spirv_std::spirv;
 // we tie #[no_std] above to the same condition, so it's fine.
 #[cfg(target_arch = "spirv")]
 use spirv_std::num_traits::Float;
+
+mod card;
 
 trait Shape: Copy {
     /// Distances indicate where the point is in relation to the shape:
@@ -34,11 +36,54 @@ trait Shape: Copy {
         }
     }
 
+    fn scale(self, scale: f32) -> Scale<Self> {
+        Scale { shape: self, scale }
+    }
+
+    fn vflip(self) -> VFlip<Self> {
+        VFlip { shape: self }
+    }
+
+    fn hflip(self) -> HFlip<Self> {
+        HFlip { shape: self }
+    }
+
+    fn vmirror(self) -> VMirror<Self> {
+        VMirror { shape: self }
+    }
+
+    fn hmirror(self) -> HMirror<Self> {
+        HMirror { shape: self }
+    }
+
+    fn invert(self) -> Invert<Self> {
+        Invert { shape: self }
+    }
+
+    fn rotate(self, angle: f32) -> Rotate<Self> {
+        Rotate { shape: self, angle }
+    }
+
+    fn round(self, radius: f32) -> Round<Self> {
+        Round {
+            shape: self,
+            radius,
+        }
+    }
+
     fn stroke(self, thickness: f32) -> Stroke<Self> {
         Stroke {
             shape: self,
             thickness,
         }
+    }
+
+    fn half_shape_y(self) -> HalfShapeY<Self> {
+        HalfShapeY { shape: self }
+    }
+
+    fn half_shape_x(self) -> HalfShapeX<Self> {
+        HalfShapeX { shape: self }
     }
 }
 
@@ -52,11 +97,128 @@ impl<A: Shape, B: Shape> Shape for Union<A, B> {
 }
 
 #[derive(Copy, Clone)]
+struct UnionArray<S, const N: usize> {
+    shapes: [S; N],
+}
+
+impl<S: Shape, const N: usize> Shape for UnionArray<S, N> {
+    fn distance(self, p: Vec2) -> f32 {
+        let mut d = f32::INFINITY;
+        for i in 0..N {
+            d = d.min(self.shapes[i].distance(p));
+        }
+        d
+    }
+}
+
+#[derive(Copy, Clone)]
 struct Intersect<A, B>(A, B);
 
 impl<A: Shape, B: Shape> Shape for Intersect<A, B> {
     fn distance(self, p: Vec2) -> f32 {
         self.0.distance(p).max(self.1.distance(p))
+    }
+}
+
+#[derive(Copy, Clone)]
+struct At<S> {
+    shape: S,
+    center: Vec2,
+}
+
+impl<S: Shape> Shape for At<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        self.shape.distance(p - self.center)
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Scale<S> {
+    shape: S,
+    scale: f32,
+}
+
+impl<S: Shape> Shape for Scale<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        self.shape.distance(p / self.scale) * self.scale
+    }
+}
+
+#[derive(Copy, Clone)]
+struct VFlip<S> {
+    shape: S,
+}
+
+impl<S: Shape> Shape for VFlip<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        self.shape.distance(vec2(-p.x, p.y))
+    }
+}
+
+#[derive(Copy, Clone)]
+struct HFlip<S> {
+    shape: S,
+}
+
+impl<S: Shape> Shape for HFlip<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        self.shape.distance(vec2(p.x, -p.y))
+    }
+}
+
+#[derive(Copy, Clone)]
+struct VMirror<S> {
+    shape: S,
+}
+
+impl<S: Shape> Shape for VMirror<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        self.shape.distance(vec2(p.x.abs(), p.y))
+    }
+}
+#[derive(Copy, Clone)]
+struct HMirror<S> {
+    shape: S,
+}
+
+impl<S: Shape> Shape for HMirror<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        self.shape.distance(vec2(p.x, p.y.abs()))
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Invert<S> {
+    shape: S,
+}
+
+impl<S: Shape> Shape for Invert<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        -self.shape.distance(p)
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Rotate<S> {
+    shape: S,
+    angle: f32,
+}
+
+impl<S: Shape> Shape for Rotate<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        self.shape.distance(Mat2::from_angle(self.angle) * p)
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Round<S> {
+    shape: S,
+    radius: f32,
+}
+
+impl<S: Shape> Shape for Round<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        self.shape.distance(p) - self.radius
     }
 }
 
@@ -73,14 +235,24 @@ impl<S: Shape> Shape for Stroke<S> {
 }
 
 #[derive(Copy, Clone)]
-struct At<S> {
+struct HalfShapeY<S> {
     shape: S,
-    center: Vec2,
 }
 
-impl<S: Shape> Shape for At<S> {
+impl<S: Shape> Shape for HalfShapeY<S> {
     fn distance(self, p: Vec2) -> f32 {
-        self.shape.distance(p - self.center)
+        self.shape.distance(p).max(p.x)
+    }
+}
+
+#[derive(Copy, Clone)]
+struct HalfShapeX<S> {
+    shape: S,
+}
+
+impl<S: Shape> Shape for HalfShapeX<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        self.shape.distance(p).max(p.y)
     }
 }
 
@@ -113,7 +285,7 @@ impl Shape for Line {
 
 #[derive(Copy, Clone)]
 struct Circle {
-        radius: f32,
+    radius: f32,
 }
 
 impl Shape for Circle {
@@ -124,7 +296,7 @@ impl Shape for Circle {
 
 #[derive(Copy, Clone)]
 struct Rectangle {
-        size: Vec2,
+    size: Vec2,
 }
 
 impl Shape for Rectangle {
@@ -147,8 +319,17 @@ impl Painter {
 
     /// Fill and add a constrasting border (0.5px thick stroke of inverted color).
     fn fill_with_contrast_border(&mut self, shape: impl Shape, color: Vec4) {
+        self.fill(shape.stroke(2.0), (Vec3::ONE - color.xyz()).extend(color.w));
         self.fill(shape, color);
-        self.fill(shape.stroke(0.5), (Vec3::ONE - color.xyz()).extend(color.w));
+    }
+    fn fill_with_black_border(&mut self, shape: impl Shape, color: Vec4) {
+        self.fill(shape.stroke(2.0), Vec3::ZERO.extend(color.w));
+        self.fill(shape, color);
+    }
+
+    fn drop_shadow(&mut self, shape: impl Shape, color: Vec4, radius: f32) {
+        let alpha = (-(shape.distance(self.frag_coord).max(0.0) / (2.0 * radius)).powi(2)).exp();
+        self.color = self.color.lerp(color.xyz(), alpha * color.w);
     }
 }
 
@@ -224,7 +405,7 @@ pub fn main_fs(
         let size = Vec2::splat(mouse_circle.radius * 2.0) / vec2(3.0, 2.0);
         Rectangle { size }
             .at(size * vec2(i as f32 - 1.0, -0.5))
-        .intersect(mouse_circle)
+            .intersect(mouse_circle)
     };
 
     for i in 0..3 {
@@ -252,6 +433,10 @@ pub fn main_fs(
             .at(cursor),
         WHITE,
     );
+
+    *output = painter.color.extend(1.0);
+
+    card::cards_demo(&mut painter, constants);
 
     *output = painter.color.extend(1.0);
 }

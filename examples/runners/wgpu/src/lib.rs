@@ -143,6 +143,7 @@ fn maybe_watch(
 
         let builder = SpirvBuilder::new(crate_path, "spirv-unknown-vulkan1.1")
             .print_metadata(MetadataPrintout::None)
+            .capability(spirv_builder::Capability::Int8)
             .shader_panic_strategy(if has_debug_printf {
                 spirv_builder::ShaderPanicStrategy::DebugPrintfThenExit {
                     print_inputs: true,

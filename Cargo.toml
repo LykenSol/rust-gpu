@@ -40,7 +40,9 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/rust-gpu/rust-gpu"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_arch, values("spirv"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = [
+    'cfg(target_arch, values("spirv"))',
+] }
 
 [workspace.dependencies]
 spirv-builder = { path = "./crates/spirv-builder", version = "=0.9.0", default-features = false }
@@ -88,4 +90,9 @@ codegen-units = 256
 # (moved to `.github/workflows/ci.yaml` as `RUSTFLAGS: -Zshare-generics=off`).
 #
 # rustflags = ["-Zshare-generics=off"]
+
 codegen-units = 1
+# HACK(eddyb) don't optimize the shader crate, to avoid `spirv-opt` taking
+# a long time (10 minutes if itself was optimized, over an hour otherwise).
+[profile.release.package."mouse-shader"]
+opt-level = 0

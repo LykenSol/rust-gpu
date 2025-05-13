@@ -361,6 +361,10 @@ async fn run(
 
                     queue.submit(Some(encoder.finish()));
                     output.present();
+
+                    if let crate::RustGPUShader::Mouse = options.shader {
+                        window.set_cursor_visible(false);
+                    }
                 }
             }
             Event::WindowEvent {

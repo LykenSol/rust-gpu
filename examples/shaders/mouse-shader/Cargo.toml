@@ -16,3 +16,4 @@ crate-type = ["dylib"]
 [dependencies]
 shared = { path = "../../shaders/shared" }
 spirv-std = { workspace = true }
+rand = { version = "0.9.0", default-features = false }
