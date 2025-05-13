@@ -27,6 +27,13 @@ trait Shape: Copy {
         Intersect(self, other)
     }
 
+    fn at(self, center: Vec2) -> At<Self> {
+        At {
+            shape: self,
+            center,
+        }
+    }
+
     fn stroke(self, thickness: f32) -> Stroke<Self> {
         Stroke {
             shape: self,
@@ -66,6 +73,18 @@ impl<S: Shape> Shape for Stroke<S> {
 }
 
 #[derive(Copy, Clone)]
+struct At<S> {
+    shape: S,
+    center: Vec2,
+}
+
+impl<S: Shape> Shape for At<S> {
+    fn distance(self, p: Vec2) -> f32 {
+        self.shape.distance(p - self.center)
+    }
+}
+
+#[derive(Copy, Clone)]
 struct Line(Vec2, Vec2);
 
 impl Shape for Line {
@@ -94,27 +113,24 @@ impl Shape for Line {
 
 #[derive(Copy, Clone)]
 struct Circle {
-    center: Vec2,
-    radius: f32,
+        radius: f32,
 }
 
 impl Shape for Circle {
     fn distance(self, p: Vec2) -> f32 {
-        p.distance(self.center) - self.radius
+        p.length() - self.radius
     }
 }
 
 #[derive(Copy, Clone)]
 struct Rectangle {
-    center: Vec2,
-    size: Vec2,
+        size: Vec2,
 }
 
 impl Shape for Rectangle {
     fn distance(self, p: Vec2) -> f32 {
-        let diff = p - self.center;
-        let diff = vec2(diff.x.abs(), diff.y.abs());
-        (diff - self.size / 2.0).max_element()
+        let d = p.abs() - self.size / 2.0;
+        d.max(Vec2::ZERO).length() + d.max_element().min(0.0)
     }
 }
 
@@ -203,22 +219,17 @@ pub fn main_fs(
         }
     }
 
-    let mouse_circle = Circle {
-        center: cursor,
-        radius: 32.0,
-    };
+    let mouse_circle = Circle { radius: 32.0 };
     let mouse_button = |i: usize| {
         let size = Vec2::splat(mouse_circle.radius * 2.0) / vec2(3.0, 2.0);
-        Rectangle {
-            center: mouse_circle.center + size * vec2(i as f32 - 1.0, -0.5),
-            size,
-        }
+        Rectangle { size }
+            .at(size * vec2(i as f32 - 1.0, -0.5))
         .intersect(mouse_circle)
     };
 
     for i in 0..3 {
         painter.fill(
-            mouse_button(i),
+            mouse_button(i).at(cursor),
             RED.lerp(
                 WHITE
                     .xyz()
@@ -237,7 +248,8 @@ pub fn main_fs(
             .stroke(4.0)
             .union(mouse_button(0).stroke(3.0))
             .union(mouse_button(1).stroke(3.0))
-            .union(mouse_button(2).stroke(3.0)),
+            .union(mouse_button(2).stroke(3.0))
+            .at(cursor),
         WHITE,
     );
 
