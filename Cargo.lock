@@ -3099,7 +3099,7 @@ dependencies = [
 [[package]]
 name = "spirt"
 version = "0.4.0"
-source = "git+https://github.com/LykenSol/spirt?branch=qptr-mem-pnp#e725f47ad4f24df2e5674170ae4534fa9d375864"
+source = "git+https://github.com/LykenSol/spirt?branch=qptr-legalize#da3c9cc18d947aef9406dba474ec54b319a18a4d"
 dependencies = [
  "arrayvec",
  "bitflags 2.10.0",
