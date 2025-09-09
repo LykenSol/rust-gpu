@@ -28,7 +28,7 @@ LL | pub fn main(i: f32, o: &mut f32) {
 error: cannot cast between pointer types
        from `*f32`
          to `*struct () {  }`
-  --> $CORE_SRC/ptr/mod.rs:625:34
+  --> $CORE_SRC/ptr/mod.rs:630:34
    |
 LL |                 src: *const () = src as *const (),
    |                                  ^^^^^^^^^^^^^^^^
@@ -62,7 +62,7 @@ LL | pub fn main(i: f32, o: &mut f32) {
 error: cannot cast between pointer types
        from `*f32`
          to `*struct () {  }`
-  --> $CORE_SRC/ptr/mod.rs:626:32
+  --> $CORE_SRC/ptr/mod.rs:631:32
    |
 LL |                 dst: *mut () = dst as *mut (),
    |                                ^^^^^^^^^^^^^^

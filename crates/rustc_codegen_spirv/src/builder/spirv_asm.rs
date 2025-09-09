@@ -3,7 +3,7 @@ use crate::maybe_pqp_cg_ssa as rustc_codegen_ssa;
 
 use super::Builder;
 use crate::abi::ConvSpirvType;
-use crate::builder_spirv::{SpirvValue, SpirvValueExt, SpirvValueKind};
+use crate::builder_spirv::{SpirvConst, SpirvValue, SpirvValueExt};
 use crate::codegen_cx::CodegenCx;
 use crate::spirv_type::SpirvType;
 use rspirv::dr;
@@ -129,11 +129,14 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
             if let Some(in_value) = in_value
                 && let OperandValue::Immediate(in_value_spv) = &mut in_value.val
             {
-                if let SpirvValueKind::FnAddr { function } = in_value_spv.kind
+                if let Some(SpirvConst::PtrToFunc {
+                    func_id,
+                    mangled_func_name: _,
+                }) = self.builder.lookup_const(*in_value_spv)
                     && let SpirvType::Pointer { pointee } = self.lookup_type(in_value_spv.ty)
                 {
                     // reference to function pointer must be unwrapped from its pointer to be used in calls
-                    *in_value_spv = function.with_type(pointee);
+                    *in_value_spv = func_id.with_type(pointee);
                 } else if let BackendRepr::Scalar(scalar) = in_value.layout.backend_repr
                     && let Primitive::Pointer(_) = scalar.primitive()
                 {

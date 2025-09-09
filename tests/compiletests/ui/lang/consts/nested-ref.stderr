@@ -16,11 +16,5 @@ LL | fn deep_transpose(r: &'static &'static Mat2) -> Mat2 {
    = note: inlining was required due to illegal parameter type
    = note: called from `nested_ref::main`
 
-error: error:0:0 - In Logical addressing, variables can only allocate a pointer to the StorageBuffer or Workgroup storage classes
-         %27 = OpVariable %_ptr_Private__ptr_Private_uint Private %26
-   |
-   = note: spirv-val failed
-   = note: module `$TEST_BUILD_DIR/lang/consts/nested-ref.spv1.3`
-
-error: aborting due to 1 previous error; 2 warnings emitted
+warning: 2 warnings emitted
 
