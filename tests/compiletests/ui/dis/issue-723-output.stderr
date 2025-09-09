@@ -6,3 +6,4 @@ OpExecutionMode %1 OriginUpperLeft
 OpName %3 "issue_723_output::main"
 %4 = OpTypeVoid
 %5 = OpTypeFunction %4
+OpLine %2 28 7
