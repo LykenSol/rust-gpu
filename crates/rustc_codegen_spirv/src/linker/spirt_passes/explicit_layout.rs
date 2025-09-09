@@ -591,6 +591,11 @@ impl<'a> SelectiveEraser<'a> {
                 return Ok(());
             }
 
+            DataInstKind::Mem(_) => {
+                return Err(Diag::bug([
+                    "unhandled pointer type change in unexpected `mem` instruction".into(),
+                ]));
+            }
             DataInstKind::QPtr(_) => {
                 return Err(Diag::bug([
                     "unhandled pointer type change in unexpected `qptr` instruction".into(),
