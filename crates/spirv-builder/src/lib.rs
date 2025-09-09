@@ -1027,7 +1027,7 @@ fn invoke_rustc(builder: &SpirvBuilder) -> Result<PathBuf, SpirvBuilderError> {
         cargo_cmd,
         "--lib",
         "--message-format=json-render-diagnostics",
-        "-Zbuild-std=core",
+        "-Zbuild-std=core,alloc",
         "-Zbuild-std-features=compiler-builtins-mem",
         "--profile",
         profile,

@@ -63,6 +63,7 @@ pub fn link(
         for obj in codegen_results
             .modules
             .iter()
+            .chain(&codegen_results.allocator_module)
             .filter_map(|m| m.object.as_ref())
         {
             check_file_is_writeable(obj, sess);
@@ -137,6 +138,7 @@ fn link_rlib(
     for obj in codegen_results
         .modules
         .iter()
+        .chain(&codegen_results.allocator_module)
         .filter_map(|m| m.object.as_ref())
     {
         file_list.push(obj);
@@ -170,6 +172,7 @@ fn link_exe(
     for obj in codegen_results
         .modules
         .iter()
+        .chain(&codegen_results.allocator_module)
         .filter_map(|m| m.object.as_ref())
     {
         objects.push(obj.clone());

@@ -121,6 +121,7 @@ macro_rules! assert_ty_eq {
 }
 
 mod abi;
+mod allocator;
 mod attr;
 mod builder;
 mod builder_spirv;
@@ -154,7 +155,7 @@ use rustc_data_structures::fx::FxIndexMap;
 use rustc_errors::DiagCtxtHandle;
 use rustc_metadata::EncodedMetadata;
 use rustc_middle::dep_graph::{WorkProduct, WorkProductId};
-use rustc_middle::mir::mono::{MonoItem, MonoItemData};
+use rustc_middle::mir::mono::{CodegenUnit, MonoItem, MonoItemData};
 use rustc_middle::mir::pretty::write_mir_pretty;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{InstanceKind, TyCtxt};
@@ -432,8 +433,20 @@ impl WriteBackendMethods for SpirvCodegenBackend {
 }
 
 impl ExtraBackendMethods for SpirvCodegenBackend {
-    fn codegen_allocator(&self, _: TyCtxt<'_>, _: &str, _: &[AllocatorMethod]) -> Self::Module {
-        todo!()
+    fn codegen_allocator(
+        &self,
+        tcx: TyCtxt<'_>,
+        module_name: &str,
+        methods: &[AllocatorMethod],
+    ) -> Self::Module {
+        // HACK(eddyb) this pseudo-CGU allows using `CodegenCx` itself.
+        let cgu = tcx
+            .arena
+            .alloc(CodegenUnit::new(Symbol::intern(module_name)));
+
+        let cx = CodegenCx::new(tcx, cgu);
+        allocator::codegen(&cx, methods);
+        cx.finalize_module()
     }
 
     fn compile_codegen_unit<'tcx>(
