@@ -763,7 +763,8 @@ impl<'tcx> CodegenCx<'tcx> {
                     SpirvType::Array { element, .. }
                     | SpirvType::RuntimeArray { element, .. }
                     | SpirvType::Pointer {
-                        pointee: element, ..
+                        pointee: Some(element),
+                        ..
                     } => self.lookup_type(element),
                     e => e,
                 };
@@ -1107,7 +1108,8 @@ impl<'tcx> CodegenCx<'tcx> {
                 | SpirvType::Array { element, .. }
                 | SpirvType::RuntimeArray { element, .. }
                 | SpirvType::Pointer {
-                    pointee: element, ..
+                    pointee: Some(element),
+                    ..
                 }
                 | SpirvType::InterfaceBlock {
                     inner_type: element,

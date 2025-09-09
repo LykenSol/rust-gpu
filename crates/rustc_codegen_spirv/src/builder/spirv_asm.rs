@@ -133,7 +133,10 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                     func_id,
                     mangled_func_name: _,
                 }) = self.builder.lookup_const(*in_value_spv)
-                    && let SpirvType::Pointer { pointee, .. } = self.lookup_type(in_value_spv.ty)
+                    && let SpirvType::Pointer {
+                        pointee: Some(pointee),
+                        ..
+                    } = self.lookup_type(in_value_spv.ty)
                 {
                     // reference to function pointer must be unwrapped from its pointer to be used in calls
                     *in_value_spv = func_id.with_type(pointee);
@@ -431,7 +434,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                         .emit();
                 }
                 SpirvType::Pointer {
-                    pointee: inst.operands[1].unwrap_id_ref(),
+                    pointee: Some(inst.operands[1].unwrap_id_ref()),
                     addr_space: AddressSpace::ZERO,
                 }
                 .def(self.span(), self)
@@ -746,7 +749,12 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     (TyPat::Any | &TyPat::T | TyPat::Either(..), _) => unreachable!(),
 
                     (TyPat::Void, SpirvType::Void) => Ok([None]),
-                    (TyPat::Pointer(_, pat), SpirvType::Pointer { pointee: ty, .. })
+                    (
+                        TyPat::Pointer(_, pat),
+                        SpirvType::Pointer {
+                            pointee: Some(ty), ..
+                        },
+                    )
                     | (TyPat::Vector(pat), SpirvType::Vector { element: ty, .. })
                     | (
                         TyPat::Vector4(pat),
@@ -790,7 +798,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 },
 
                 TyPat::Pointer(_, pat) => SpirvType::Pointer {
-                    pointee: subst_ty_pat(cx, pat, ty_vars, leftover_operands)?,
+                    pointee: Some(subst_ty_pat(cx, pat, ty_vars, leftover_operands)?),
                     addr_space: AddressSpace::ZERO,
                 }
                 .def(DUMMY_SP, cx),
@@ -1041,7 +1049,10 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     Some(match kind {
                         TypeofKind::Plain => ty,
                         TypeofKind::Dereference => match self.lookup_type(ty) {
-                            SpirvType::Pointer { pointee, .. } => pointee,
+                            SpirvType::Pointer {
+                                pointee: Some(pointee),
+                                ..
+                            } => pointee,
                             other => {
                                 self.tcx.dcx().span_err(
                                     span,
@@ -1063,7 +1074,10 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     self.check_reg(span, reg);
                     if let Some(place) = place {
                         match self.lookup_type(place.val.llval.ty) {
-                            SpirvType::Pointer { pointee, .. } => Some(pointee),
+                            SpirvType::Pointer {
+                                pointee: Some(pointee),
+                                ..
+                            } => Some(pointee),
                             other => {
                                 self.tcx.dcx().span_err(
                                     span,
