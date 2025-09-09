@@ -157,7 +157,7 @@ pub(super) fn run_func_passes<P>(
             let layout_config = &spirt::mem::LayoutConfig {
                 abstract_bool_size_align: (1, 1),
                 logical_ptr_size_align: (4, 4),
-                ..spirt::mem::LayoutConfig::VULKAN_SCALAR_LAYOUT
+                ..spirt::mem::LayoutConfig::VULKAN_SCALAR_LAYOUT_LE
             };
 
             let profiler = before_pass("qptr::lower_from_spv_ptrs", module);
@@ -426,7 +426,7 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
 
                     // HACK(eddyb) small selection relevant for now,
                     // but should be extended using e.g. a bitset.
-                    DataInstKind::SpvInst(spv_inst) => {
+                    DataInstKind::SpvInst(spv_inst, _) => {
                         [wk.OpNop, wk.OpCompositeInsert].contains(&spv_inst.opcode)
                     }
 
@@ -434,7 +434,7 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                     | NodeKind::Loop { .. }
                     | NodeKind::ExitInvocation(spirt::cf::ExitInvocationKind::SpvInst(_))
                     | DataInstKind::FuncCall(_)
-                    | DataInstKind::Mem(MemOp::Load | MemOp::Store)
+                    | DataInstKind::Mem(MemOp::Load { .. } | MemOp::Store { .. })
                     | DataInstKind::ThunkBind(_)
                     | DataInstKind::SpvExtInst { .. } => false,
                 };
@@ -459,10 +459,9 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                                 mark_used_and_propagate(input);
                             }
                         } else {
-                            // HACK(eddyb) sanity check pre-disaggregate.
-                            assert_eq!(node_def.outputs.len(), 1);
-
-                            mark_used_and_propagate(Value::Var(node_def.outputs[0]));
+                            for &output_var in &node_def.outputs {
+                                mark_used_and_propagate(Value::Var(output_var));
+                            }
                         }
                     }
                 }
@@ -563,10 +562,10 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
             | DataInstKind::Mem(_)
             | DataInstKind::QPtr(_)
             | DataInstKind::ThunkBind(_)
-            | DataInstKind::SpvInst(_)
+            | DataInstKind::SpvInst { .. }
             | DataInstKind::SpvExtInst { .. } => {
                 let used = match &node_def.kind {
-                    DataInstKind::SpvInst(spv_inst) if spv_inst.opcode == wk.OpNop => false,
+                    DataInstKind::SpvInst(spv_inst, _) if spv_inst.opcode == wk.OpNop => false,
 
                     _ => {
                         node_def.outputs.is_empty()

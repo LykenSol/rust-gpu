@@ -2,7 +2,6 @@
 mod test;
 
 pub(crate) mod dce;
-mod destructure_composites;
 mod duplicates;
 mod entry_interface;
 mod import_export_link;
@@ -405,7 +404,6 @@ pub fn link(
                 &constants,
                 func,
             );
-            destructure_composites::destructure_composites(func);
         }
     }
 
@@ -481,7 +479,6 @@ pub fn link(
                 &constants,
                 func,
             );
-            destructure_composites::destructure_composites(func);
         }
     }
 
