@@ -3139,7 +3139,7 @@ dependencies = [
 [[package]]
 name = "spirt"
 version = "0.4.0"
-source = "git+https://github.com/LykenSol/spirt?branch=qptr-legalize#da3c9cc18d947aef9406dba474ec54b319a18a4d"
+source = "git+https://github.com/LykenSol/spirt?branch=ephemera%2Fpolaris#004febff9a8ce20c78d014cf8a7c05e65b1f758a"
 dependencies = [
  "arrayvec",
  "bitflags 2.9.4",
