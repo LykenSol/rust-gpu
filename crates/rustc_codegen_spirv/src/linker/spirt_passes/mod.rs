@@ -14,6 +14,8 @@ use rustc_data_structures::fx::FxIndexSet;
 use rustc_index::bit_set::DenseBitSet as BitSet;
 use smallvec::SmallVec;
 use spirt::func_at::FuncAt;
+use spirt::mem::MemOp;
+use spirt::qptr::QPtrOp;
 use spirt::visit::{InnerVisit, Visitor};
 use spirt::{
     AttrSet, Const, ConstDef, ConstKind, Context, DataInstKind, DeclDef, EntityOrientedDenseMap,
@@ -96,15 +98,6 @@ macro_rules! def_spv_spec_with_extra_well_known {
 }
 def_spv_spec_with_extra_well_known! {
     opcode: spv::spec::Opcode = [
-        OpTypeVoid,
-
-        OpConstantComposite,
-
-        OpBitcast,
-        OpCompositeInsert,
-        OpCompositeExtract,
-        OpCompositeConstruct,
-
         OpCopyMemory,
     ],
     operand_kind: spv::spec::OperandKind = [
@@ -420,6 +413,17 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                 };
                 let node_def = func_at_node.def();
                 let is_pure = match &node_def.kind {
+                    DataInstKind::Scalar(_)
+                    | DataInstKind::Vector(_)
+                    | DataInstKind::Mem(MemOp::FuncLocalVar(_))
+                    | DataInstKind::QPtr(
+                        QPtrOp::HandleArrayIndex
+                        | QPtrOp::BufferData
+                        | QPtrOp::BufferDynLen { .. }
+                        | QPtrOp::Offset(_)
+                        | QPtrOp::DynOffset { .. },
+                    ) => true,
+
                     // HACK(eddyb) small selection relevant for now,
                     // but should be extended using e.g. a bitset.
                     DataInstKind::SpvInst(spv_inst) => {
@@ -430,8 +434,7 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                     | NodeKind::Loop { .. }
                     | NodeKind::ExitInvocation(spirt::cf::ExitInvocationKind::SpvInst(_))
                     | DataInstKind::FuncCall(_)
-                    | DataInstKind::Mem(_)
-                    | DataInstKind::QPtr(_)
+                    | DataInstKind::Mem(MemOp::Load | MemOp::Store)
                     | DataInstKind::ThunkBind(_)
                     | DataInstKind::SpvExtInst { .. } => false,
                 };
@@ -554,7 +557,9 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
 
             NodeKind::ExitInvocation { .. } => {}
 
-            DataInstKind::FuncCall(_)
+            DataInstKind::Scalar(_)
+            | DataInstKind::Vector(_)
+            | DataInstKind::FuncCall(_)
             | DataInstKind::Mem(_)
             | DataInstKind::QPtr(_)
             | DataInstKind::ThunkBind(_)
