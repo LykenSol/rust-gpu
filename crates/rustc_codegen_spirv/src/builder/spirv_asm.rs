@@ -129,10 +129,8 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
             if let Some(in_value) = in_value
                 && let OperandValue::Immediate(in_value_spv) = &mut in_value.val
             {
-                if let Some(SpirvConst::PtrToFunc {
-                    func_id,
-                    mangled_func_name: _,
-                }) = self.builder.lookup_const(*in_value_spv)
+                if let Some(SpirvConst::PtrToFunc { func_id }) =
+                    self.builder.lookup_const(*in_value_spv)
                     && let SpirvType::Pointer {
                         pointee: Some(pointee),
                         ..

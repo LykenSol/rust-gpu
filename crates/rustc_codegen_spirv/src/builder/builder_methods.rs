@@ -2478,11 +2478,9 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
             let bitcast_result_id = self.emit().bitcast(dest_ty, None, ptr_id).unwrap();
 
             SpirvValue {
-                zombie_waiting_for_span: false,
                 kind: SpirvValueKind::Def {
                     id: bitcast_result_id,
                     original_ptr_before_casts: Some(SpirvValue {
-                        zombie_waiting_for_span: ptr.zombie_waiting_for_span,
                         kind: ptr_id,
                         ty: ptr.ty,
                     }),
@@ -3360,10 +3358,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                     self.builder
                         .lookup_const(callee)
                         .and_then(|const_callee| match const_callee {
-                            SpirvConst::PtrToFunc {
-                                func_id,
-                                mangled_func_name: _,
-                            } => {
+                            SpirvConst::PtrToFunc { func_id } => {
                                 if pointee_is_function {
                                     assert_ty_eq!(self, callee_ty, pointee);
                                 }
