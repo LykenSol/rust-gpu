@@ -6,15 +6,15 @@
 OpNoLine
 OpSelectionMerge %10 None
 OpSwitch %8 %11 0 %12 1 %13 2 %14
-%11 = OpLabel
-OpBranch %10
 %12 = OpLabel
 OpBranch %10
 %13 = OpLabel
 OpBranch %10
 %14 = OpLabel
 OpBranch %10
+%11 = OpLabel
+OpBranch %10
 %10 = OpLabel
-%15 = OpPhi  %2  %16 %11 %16 %12 %17 %13 %18 %14
+%15 = OpPhi  %2  %16 %12 %17 %13 %18 %14 %16 %11
 OpReturnValue %15
 OpFunctionEnd
