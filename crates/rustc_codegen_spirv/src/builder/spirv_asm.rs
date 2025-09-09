@@ -13,7 +13,7 @@ use rspirv::spirv::{
     GroupOperation, ImageOperands, KernelProfilingInfo, LoopControl, MemoryAccess, MemorySemantics,
     Op, RayFlags, SelectionControl, StorageClass, Word,
 };
-use rustc_abi::{BackendRepr, Primitive};
+use rustc_abi::{AddressSpace, BackendRepr, Primitive};
 use rustc_ast::ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_codegen_ssa::mir::operand::OperandValue;
 use rustc_codegen_ssa::mir::place::PlaceRef;
@@ -133,7 +133,7 @@ impl<'a, 'tcx> AsmBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                     func_id,
                     mangled_func_name: _,
                 }) = self.builder.lookup_const(*in_value_spv)
-                    && let SpirvType::Pointer { pointee } = self.lookup_type(in_value_spv.ty)
+                    && let SpirvType::Pointer { pointee, .. } = self.lookup_type(in_value_spv.ty)
                 {
                     // reference to function pointer must be unwrapped from its pointer to be used in calls
                     *in_value_spv = func_id.with_type(pointee);
@@ -419,6 +419,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 }
                 SpirvType::Pointer {
                     pointee: inst.operands[1].unwrap_id_ref(),
+                    addr_space: AddressSpace::ZERO,
                 }
                 .def(self.span(), self)
             }
@@ -777,6 +778,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
 
                 TyPat::Pointer(_, pat) => SpirvType::Pointer {
                     pointee: subst_ty_pat(cx, pat, ty_vars, leftover_operands)?,
+                    addr_space: AddressSpace::ZERO,
                 }
                 .def(DUMMY_SP, cx),
 
@@ -1026,7 +1028,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     Some(match kind {
                         TypeofKind::Plain => ty,
                         TypeofKind::Dereference => match self.lookup_type(ty) {
-                            SpirvType::Pointer { pointee } => pointee,
+                            SpirvType::Pointer { pointee, .. } => pointee,
                             other => {
                                 self.tcx.dcx().span_err(
                                     span,
@@ -1048,7 +1050,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     self.check_reg(span, reg);
                     if let Some(place) = place {
                         match self.lookup_type(place.val.llval.ty) {
-                            SpirvType::Pointer { pointee } => Some(pointee),
+                            SpirvType::Pointer { pointee, .. } => Some(pointee),
                             other => {
                                 self.tcx.dcx().span_err(
                                     span,

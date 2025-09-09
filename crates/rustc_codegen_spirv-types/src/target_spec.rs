@@ -66,7 +66,7 @@ impl TargetSpecVersion {
   "arch": "spirv",
   "crt-objects-fallback": "false",
   "crt-static-allows-dylibs": true,
-  "data-layout": "e-m:e-p:32:32:32-i64:64-n8:16:32:64",
+  "data-layout": "e-m:e-P1-p:32:32:32-i64:64-n8:16:32:64",
   "dll-prefix": "",
   "dll-suffix": ".spv.json",
   "dynamic-linking": true,
