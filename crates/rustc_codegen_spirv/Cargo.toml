@@ -78,7 +78,7 @@ smallvec = { version = "1.6.1", features = ["const_generics", "const_new", "unio
 # - WIP: qptr-mem-pnp
 # - WIP: qptr-legalize
 # - WIP: ephemera/polaris
-spirt = { git = "https://github.com/LykenSol/spirt", branch = "ephemera/polaris" }
+spirt = { git = "https://github.com/LykenSol/spirt", branch = "ephemera/polaris-plus-rec-call-emu" }
 spirv-tools.workspace = true
 lazy_static = "1.4.0"
 itertools = "0.14.0"

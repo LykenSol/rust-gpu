@@ -219,6 +219,7 @@ impl Transformer for Validator<'_> {
 
             NodeKind::Select(_)
             | NodeKind::Loop { .. }
+            | NodeKind::ExitInvocation(cf::ExitInvocationKind::Abort)
             | DataInstKind::Scalar(_)
             | DataInstKind::Vector(_)
             | DataInstKind::FuncCall(_)
