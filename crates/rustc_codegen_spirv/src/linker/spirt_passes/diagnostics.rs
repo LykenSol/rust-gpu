@@ -336,7 +336,7 @@ impl DiagnosticReporter<'_> {
                     Ok,
                 ),
             }
-            self.any_spirt_bugs = matches!(level, DiagLevel::Bug(_));
+            self.any_spirt_bugs |= matches!(level, DiagLevel::Bug(_));
         }
     }
 }

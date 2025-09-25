@@ -154,6 +154,10 @@ impl Transformer for SelectiveEraser<'_> {
     }
 
     fn in_place_transform_func_decl(&mut self, func_decl: &mut FuncDecl) {
+        // HACK(eddyb) if any nodes already have SPIR-T diagnostics,
+        // investigating them might be harder if the function is transformed.
+        let mut already_has_errors = false;
+
         // HACK(eddyb) to catch any instructions having their input/output types
         // changed from under them, a separate visit has to be used before *any*
         // region input/node output declarations in the function body may change.
@@ -164,12 +168,27 @@ impl Transformer for SelectiveEraser<'_> {
                 enter_region: |_: &mut _, _| {},
                 exit_region: |_: &mut _, _| {},
                 enter_node: |_: &mut _, func_at_node: FuncAt<'_, Node>| {
+                    already_has_errors |= func_at_node
+                        .def()
+                        .attrs
+                        .diags(self.cx)
+                        .iter()
+                        .any(|diag| matches!(diag.level, DiagLevel::Bug(_) | DiagLevel::Error));
                     if let Err(e) = self.pre_check_node(func_at_node) {
                         errors_to_attach.push((func_at_node.position, e));
                     }
                 },
                 exit_node: |_: &mut _, _| {},
             });
+
+            // FIXME(eddyb) skipping the `inner_in_place_transform_with`
+            // will result in any functions called by this function to
+            // also not get transformed, but at least the errors should
+            // mean that the shader cannot succeed compiling *anyway*.
+            if already_has_errors {
+                return;
+            }
+
             for (node, err) in errors_to_attach {
                 func_def_body
                     .at_mut(node)

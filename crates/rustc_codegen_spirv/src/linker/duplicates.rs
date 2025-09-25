@@ -241,7 +241,7 @@ pub fn remove_duplicate_types(module: &mut Module) {
     let mut name_ids = FxHashSet::default();
     let mut member_name_ids = FxHashSet::default();
     module.debug_names.retain(|inst| {
-        (inst.class.opcode != Op::Name || name_ids.insert(inst.operands[0].unwrap_id_ref()))
+        (inst.class.opcode != Op::Name || true || name_ids.insert(inst.operands[0].unwrap_id_ref()))
             && (inst.class.opcode != Op::MemberName
                 || member_name_ids.insert((
                     inst.operands[0].unwrap_id_ref(),

@@ -442,7 +442,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             SpirvType::RuntimeArray { .. } => {
                 self.fatal("memset on runtime arrays not implemented yet")
             }
-            SpirvType::Pointer { .. } => self.fatal("memset on pointers not implemented yet"),
+            SpirvType::Pointer { .. } => {
+                let usize_type = self.type_usize();
+                let usize_pat = self
+                    .memset_const_pattern(&self.lookup_type(usize_type), fill_byte)
+                    .with_type(usize_type);
+                self.const_bitcast(usize_pat, ty.def(self.span(), self))
+                    .def(self)
+            }
             SpirvType::Function { .. } => self.fatal("memset on functions not implemented yet"),
             SpirvType::Image { .. } => self.fatal("cannot memset image"),
             SpirvType::Sampler => self.fatal("cannot memset sampler"),
@@ -504,7 +511,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             SpirvType::RuntimeArray { .. } => {
                 self.fatal("memset on runtime arrays not implemented yet")
             }
-            SpirvType::Pointer { .. } => self.fatal("memset on pointers not implemented yet"),
+            SpirvType::Pointer { .. } => {
+                let usize_type = self.type_usize();
+                let usize_pat = self
+                    .memset_dynamic_pattern(&self.lookup_type(usize_type), fill_var)
+                    .with_type(usize_type);
+                self.bitcast(usize_pat, ty.def(self.span(), self)).def(self)
+            }
             SpirvType::Function { .. } => self.fatal("memset on functions not implemented yet"),
             SpirvType::Image { .. } => self.fatal("cannot memset image"),
             SpirvType::Sampler => self.fatal("cannot memset sampler"),
@@ -2312,6 +2325,14 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                     )
                     .unwrap()
                     .with_type(dest_ty);
+            }
+
+            match (val_ty_kind, dest_ty_kind) {
+                (SpirvType::Bool, SpirvType::Integer(..))
+                | (SpirvType::Integer(..), SpirvType::Bool) => {
+                    return self.intcast(val, dest_ty, false);
+                }
+                _ => {}
             }
 
             let val_is_ptr = matches!(val_ty_kind, SpirvType::Pointer { .. });

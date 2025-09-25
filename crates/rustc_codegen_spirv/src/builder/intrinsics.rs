@@ -9,9 +9,14 @@ use crate::custom_insts::CustomInst;
 use crate::spirv_type::SpirvType;
 use rspirv::dr::Operand;
 use rspirv::spirv::GLOp;
+use rustc_abi::HasDataLayout as _;
+use rustc_codegen_ssa::common::IntPredicate;
 use rustc_codegen_ssa::mir::operand::{OperandRef, OperandValue};
 use rustc_codegen_ssa::mir::place::PlaceRef;
-use rustc_codegen_ssa::traits::{BuilderMethods, IntrinsicCallBuilderMethods};
+use rustc_codegen_ssa::traits::{
+    BaseTypeCodegenMethods as _, BuilderMethods, ConstCodegenMethods as _,
+    IntrinsicCallBuilderMethods,
+};
 use rustc_middle::ty::layout::LayoutOf;
 use rustc_middle::ty::{FnDef, Instance, Ty, TyKind, TypingEnv};
 use rustc_middle::{bug, ty};
@@ -118,7 +123,7 @@ impl<'a, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                 match arg_tys[0].kind() {
                     TyKind::Int(_) | TyKind::Uint(_) => self
                         .emit()
-                        .i_add_sat_intel(
+                        .i_add(
                             ret_ty,
                             None,
                             args[0].immediate().def(self),
@@ -136,7 +141,7 @@ impl<'a, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                 match &arg_tys[0].kind() {
                     TyKind::Int(_) | TyKind::Uint(_) => self
                         .emit()
-                        .i_sub_sat_intel(
+                        .i_sub(
                             ret_ty,
                             None,
                             args[0].immediate().def(self),
@@ -352,7 +357,44 @@ impl<'a, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                 }
             }
 
-            sym::raw_eq | sym::compare_bytes => self.undef_zombie(ret_ty, "memcmp not implemented"),
+            sym::raw_eq => {
+                use rustc_abi::BackendRepr::*;
+                let tp_ty = fn_args.type_at(0);
+                let layout = self.layout_of(tp_ty).layout;
+                let use_integer_compare = match layout.backend_repr() {
+                    Scalar(_) | ScalarPair(_, _) => true,
+                    SimdVector { .. } => false,
+                    Memory { .. } => {
+                        // For rusty ABIs, small aggregates are actually passed
+                        // as `RegKind::Integer` (see `FnAbi::adjust_for_abi`),
+                        // so we re-use that same threshold here.
+                        layout.size() <= self.data_layout().pointer_size() * 2
+                    }
+                };
+
+                let a = args[0].immediate();
+                let b = args[1].immediate();
+                if layout.size().bytes() == 0 {
+                    self.const_bool(true)
+                } else if use_integer_compare
+                    && let width @ (8 | 16 | 32 | 64) = layout.size().bits()
+                {
+                    let integer_ty = SpirvType::Integer(width as u32, false).def(self.span(), self);
+                    let a_val = self.load(integer_ty, a, layout.align().abi);
+                    let b_val = self.load(integer_ty, b, layout.align().abi);
+                    self.icmp(IntPredicate::IntEQ, a_val, b_val)
+                } else {
+                    let n = self.const_usize(layout.size().bytes());
+                    let cmp = self.memcmp(a, b, n);
+                    self.icmp(IntPredicate::IntEQ, cmp, self.const_i32(0))
+                }
+            }
+
+            sym::compare_bytes => self.memcmp(
+                args[0].immediate(),
+                args[1].immediate(),
+                args[2].immediate(),
+            ),
 
             _ => {
                 // Call the fallback body instead of generating the intrinsic code
@@ -407,6 +449,49 @@ impl<'a, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'tcx> {
 }
 
 impl Builder<'_, '_> {
+    fn memcmp(&mut self, lhs: SpirvValue, rhs: SpirvValue, count: SpirvValue) -> SpirvValue {
+        let memcmp_return_type = SpirvType::Integer(32, true).def(self.span(), self);
+        let memcmp_imported_fn_id = self.memcmp_imported_fn_id.get().unwrap_or_else(|| {
+            let memcmp_imported_fn_id = {
+                let byte_ptr_type = self.type_ptr_to(self.type_i8());
+                let function_type = SpirvType::Function {
+                    return_type: memcmp_return_type,
+                    arguments: &[byte_ptr_type, byte_ptr_type, self.type_usize()],
+                }
+                .def(rustc_span::DUMMY_SP, self);
+
+                let mut emit = self.emit_global();
+                let id = emit
+                    .begin_function(
+                        memcmp_return_type,
+                        None,
+                        rspirv::spirv::FunctionControl::empty(),
+                        function_type,
+                    )
+                    .unwrap();
+                emit.end_function().unwrap();
+                id
+            };
+            self.emit_global().name(memcmp_imported_fn_id, "memcmp");
+            self.set_linkage(
+                memcmp_imported_fn_id,
+                "memcmp".into(),
+                rspirv::spirv::LinkageType::Import,
+            );
+            self.memcmp_imported_fn_id.set(Some(memcmp_imported_fn_id));
+            memcmp_imported_fn_id
+        });
+        self.emit()
+            .function_call(
+                memcmp_return_type,
+                None,
+                memcmp_imported_fn_id,
+                [lhs.def(self), rhs.def(self), count.def(self)],
+            )
+            .unwrap()
+            .with_type(memcmp_return_type)
+    }
+
     pub fn count_ones(&mut self, arg: SpirvValue) -> SpirvValue {
         let ty = arg.ty;
         match self.cx.lookup_type(ty) {

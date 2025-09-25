@@ -820,7 +820,16 @@ fn try_reduce_select(
     // Ignore `undef`s, as they can be legally substituted with any other value.
     let mut first_undef = None;
     let mut non_undef_cases = cases.enumerate().filter(|&(_, case)| {
-        let is_undef = as_const(case).map(|ct| &cx[ct].kind) == Some(&ConstKind::Undef);
+        let is_undef = as_const(case).is_some_and(|ct| {
+            let ct_def = &cx[ct];
+
+            // HACK(eddyb) avoid erasing diagnostics attached to consts.
+            if !ct_def.attrs.diags(cx).is_empty() {
+                return false;
+            }
+
+            ct_def.kind == ConstKind::Undef
+        });
         if is_undef && first_undef.is_none() {
             first_undef = Some(case);
         }

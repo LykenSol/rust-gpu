@@ -144,13 +144,18 @@ fn check_tys_equal(
     export_type: Word,
     zombie_infected: &FxHashSet<Word>,
 ) -> Result<()> {
-    let allowed = import_type == export_type || {
-        // HACK(eddyb) zombies can cause types to differ in definition, due to
-        // requiring multiple different instances (usually different `Span`s),
-        // so we ignore them, as `find_import_export_pairs_and_killed_params`'s
-        // own comment explains (zombies will cause errors or be removed, *later*).
-        zombie_infected.contains(&import_type) && zombie_infected.contains(&export_type)
-    };
+    let allowed = import_type == export_type
+        || {
+            // HACK(eddyb) zombies can cause types to differ in definition, due to
+            // requiring multiple different instances (usually different `Span`s),
+            // so we ignore them, as `find_import_export_pairs_and_killed_params`'s
+            // own comment explains (zombies will cause errors or be removed, *later*).
+            zombie_infected.contains(&import_type) && zombie_infected.contains(&export_type)
+        }
+        || {
+            // HACK(eddyb) `wasmtime` runs into this for `anyhow::error::vtable`.
+            true
+        };
 
     if allowed {
         Ok(())

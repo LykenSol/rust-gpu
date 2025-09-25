@@ -477,10 +477,14 @@ impl Renamer<'_, '_> {
                 new_id
             }
             Some(existing_phi) => {
-                existing_phi.operands.extend_from_slice(&[
-                    Operand::IdRef(top_def),
-                    Operand::IdRef(from_block_label),
-                ]);
+                let new_entry = [Operand::IdRef(top_def), Operand::IdRef(from_block_label)];
+                if !existing_phi
+                    .operands
+                    .chunks(2)
+                    .any(|entry| entry == &new_entry[..])
+                {
+                    existing_phi.operands.extend_from_slice(&new_entry);
+                }
                 existing_phi.result_id.unwrap()
             }
         }

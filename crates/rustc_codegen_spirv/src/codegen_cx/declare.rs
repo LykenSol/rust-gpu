@@ -311,31 +311,40 @@ impl<'tcx> CodegenCx<'tcx> {
             "get_static() should always hit the cache for statics defined in the same CGU, but did not for `{def_id:?}`"
         );
 
-        let instance = Instance::mono(self.tcx, def_id);
-        let ty = instance.ty(self.tcx, TypingEnv::fully_monomorphized());
-        let sym = self.tcx.symbol_name(instance).name;
-        let span = self.tcx.def_span(def_id);
-        let g = self.declare_global(span, self.layout_of(ty).spirv_type(span, self));
+        let g = self.declare_global(def_id);
         self.statics.borrow_mut().insert(def_id, g);
+
+        let sym = self.tcx.symbol_name(Instance::mono(self.tcx, def_id)).name;
         self.set_linkage(g.def_cx(self), sym.to_string(), LinkageType::Import);
+
         g
     }
 
-    fn declare_global(&self, span: Span, ty: Word) -> SpirvValue {
+    fn declare_global(&self, def_id: DefId) -> SpirvValue {
+        let attrs = self.tcx.codegen_fn_attrs(def_id);
+        let frozen = rustc_middle::mir::interpret::GlobalAlloc::Static(def_id)
+            .mutability(self.tcx, TypingEnv::fully_monomorphized())
+            .is_not();
+
+        // FIXME(eddyb) figure out what the correct storage class is, in all cases.
+        let storage_class = if frozen || attrs.flags.contains(CodegenFnAttrFlags::THREAD_LOCAL) {
+            StorageClass::Private
+        } else {
+            // FIXME(eddyb) this only works for zero-initialized `static`s.
+            StorageClass::Workgroup
+        };
+
+        let ty = Instance::mono(self.tcx, def_id).ty(self.tcx, TypingEnv::fully_monomorphized());
+        let span = self.tcx.def_span(def_id);
+
         let ptr_ty = SpirvType::Pointer {
-            pointee: Some(ty),
+            pointee: Some(self.layout_of(ty).spirv_type(span, self)),
             addr_space: AddressSpace::ZERO,
         }
         .def(span, self);
-        // FIXME(eddyb) figure out what the correct storage class is.
-        let result = self
-            .emit_global()
-            .variable(ptr_ty, None, StorageClass::Private, None)
-            .with_type(ptr_ty);
-        // TODO: These should be StorageClass::Private, so just zombie for now.
-        // FIXME(eddyb) why zombie? this looks like it should just work nowadays.
-        self.zombie_with_span(result.def_cx(self), span, "globals are not supported yet");
-        result
+        self.emit_global()
+            .variable(ptr_ty, None, storage_class, None)
+            .with_type(ptr_ty)
     }
 }
 
@@ -347,10 +356,6 @@ impl<'tcx> PreDefineCodegenMethods<'tcx> for CodegenCx<'tcx> {
         _visibility: Visibility,
         symbol_name: &str,
     ) {
-        let instance = Instance::mono(self.tcx, def_id);
-        let ty = instance.ty(self.tcx, TypingEnv::fully_monomorphized());
-        let span = self.tcx.def_span(def_id);
-        let spvty = self.layout_of(ty).spirv_type(span, self);
         let linkage = match linkage {
             Linkage::External => Some(LinkageType::Export),
             Linkage::Internal => None,
@@ -362,7 +367,7 @@ impl<'tcx> PreDefineCodegenMethods<'tcx> for CodegenCx<'tcx> {
             }
         };
 
-        let g = self.declare_global(span, spvty);
+        let g = self.declare_global(def_id);
 
         self.statics.borrow_mut().insert(def_id, g);
         if let Some(linkage) = linkage {
@@ -427,6 +432,7 @@ impl<'tcx> StaticCodegenMethods for CodegenCx<'tcx> {
     }
 
     fn codegen_static(&mut self, def_id: DefId) {
+        let span = self.tcx.def_span(def_id);
         let g = self.get_static(def_id);
 
         let alloc = match self.tcx.eval_static_initializer(def_id) {
@@ -455,18 +461,32 @@ impl<'tcx> StaticCodegenMethods for CodegenCx<'tcx> {
         let attrs = self.tcx.codegen_fn_attrs(def_id);
 
         let alloc = alloc.inner();
+
+        let frozen = alloc.mutability.is_not();
+        if !frozen && false {
+            // FIXME(eddyb) implement, or at least error.
+            self.zombie_with_span(g.def_cx(self), span, "NYI mutable globals");
+            return;
+        }
+
         let align_override =
             Some(alloc.align).filter(|&align| align != self.lookup_type(value_ty).alignof(self));
         if let Some(_align) = align_override {
             // FIXME(eddyb) implement, or at least error.
+            self.zombie_with_span(g.def_cx(self), span, "NYI alignment override");
+            return;
         }
 
         if attrs.flags.contains(CodegenFnAttrFlags::THREAD_LOCAL) {
             // FIXME(eddyb) implement, or at least error.
+            self.zombie_with_span(g.def_cx(self), span, "NYI #[thread_local]");
+            return;
         }
 
         if let Some(_section) = attrs.link_section {
             // FIXME(eddyb) implement, or at least error.
+            self.zombie_with_span(g.def_cx(self), span, "NYI #[link_section]");
+            return;
         }
 
         if attrs.flags.contains(CodegenFnAttrFlags::USED_COMPILER) {

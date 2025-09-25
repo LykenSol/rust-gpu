@@ -3099,7 +3099,7 @@ dependencies = [
 [[package]]
 name = "spirt"
 version = "0.4.0"
-source = "git+https://github.com/LykenSol/spirt?branch=ephemera%2Fpolaris-plus-rec-call-emu#f678a1247f0c14769b0c6d1d4f8cbc2b15e53e18"
+source = "git+https://github.com/LykenSol/spirt?branch=ephemera%2Fpolaris-final-final#4232f2793e42581c200fad6d30aca9df0756c5d8"
 dependencies = [
  "arrayvec",
  "bitflags 2.10.0",

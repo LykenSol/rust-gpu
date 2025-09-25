@@ -58,6 +58,20 @@ pub(crate) fn provide(providers: &mut Providers) {
             })
         })
     };
+    // HACK(eddyb) apply the same rewrite as the above `fn_sig` but for `type`
+    // aliases that happen to contain function pointers (`wasmtime` has some).
+    providers.type_of = |tcx, def_id| {
+        let result = (rustc_interface::DEFAULT_QUERY_PROVIDERS.type_of)(tcx, def_id);
+        result.map_bound(|ty| {
+            if let &TyKind::FnPtr(sig_tys, mut hdr) = ty.kind() {
+                if let Abi::C { .. } = hdr.abi {
+                    hdr.abi = Abi::Unadjusted;
+                    return Ty::new_fn_ptr(tcx, sig_tys.with(hdr));
+                }
+            }
+            ty
+        })
+    };
 
     // For the Rust ABI, `FnAbi` adjustments are backend-agnostic, but they will
     // use features like `PassMode::Cast`, that are incompatible with SPIR-V.
@@ -297,7 +311,7 @@ impl<'tcx> ConvSpirvType<'tcx> for TyAndLayout<'tcx> {
         // `ScalarPair`.
         // There's a few layers that we go through here. First we inspect layout.backend_repr, then if relevant, layout.fields, etc.
         match self.backend_repr {
-            _ if self.uninhabited => SpirvType::Adt {
+            _ if self.uninhabited && self.size == Size::ZERO => SpirvType::Adt {
                 def_id: def_id_for_spirv_type_adt(*self),
                 size: Some(Size::ZERO),
                 align: Align::from_bytes(0).unwrap(),
@@ -733,24 +747,32 @@ fn trans_struct_or_union<'tcx>(
                 field_names.push(Symbol::intern(&format!("{i}")));
             }
         } else {
-            if let TyKind::Adt(_, _) = ty.ty.kind() {
-            } else {
-                span_bug!(span, "Variants::Multiple not TyKind::Adt");
-            }
+            // if let TyKind::Adt(_, _) = ty.ty.kind() {
+            // } else {
+            //     span_bug!(span, "Variants::Multiple not TyKind::Adt:\n{ty:#?}");
+            // }
             if i == 0 {
                 field_names.push(cx.sym.discriminant);
             } else {
-                cx.tcx.dcx().fatal("Variants::Multiple has multiple fields")
+                // FIXME(eddyb) this looks like something that should exist in rustc.
+                field_names.push(Symbol::intern(&format!("{i}")));
+                // span_bug!(span, "Variants::Multiple has multiple fields:\n{ty:#?}")
             }
 
-            assert_eq!(i, ty.fields.count() - 1);
+            // assert_eq!(i, ty.fields.count() - 1);
 
             // HACK(eddyb) fill the space before/after the discriminant, so
             // that by-value usage of the resulting `OpTypeStruct` doesn't treat
             // variant data as padding (and therefore `undef`).
             // FIXME(eddyb) this is worse than taking advantage of known leaves
             // within the variants, especially with a single non-ZST variant.
-            for (pad_start, pad_end) in [(Size::ZERO, offset), (offset + field_ty.size, ty.size)] {
+            if i < ty.fields.count() - 1 {
+                continue;
+            }
+            for (pad_start, pad_end) in [
+                (Size::ZERO, ty.fields.offset(0)),
+                (offset + field_ty.size, ty.size),
+            ] {
                 let pad_align = align
                     .restrict_for_offset(pad_start)
                     .restrict_for_offset(pad_end);

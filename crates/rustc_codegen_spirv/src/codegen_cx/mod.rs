@@ -36,7 +36,7 @@ use rustc_span::symbol::Symbol;
 use rustc_span::{DUMMY_SP, SourceFile, Span};
 use rustc_target::callconv::FnAbi;
 use rustc_target::spec::{HasTargetSpec, Target, TargetTuple};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::iter::once;
 use std::path::PathBuf;
@@ -95,6 +95,9 @@ pub struct CodegenCx<'tcx> {
     pub i8_i16_atomics_allowed: bool,
 
     pub codegen_args: CodegenArgs,
+
+    // HACK(eddyb) `memcmp` import (for `compare_bytes` intrinsic).
+    pub memcmp_imported_fn_id: Cell<Option<Word>>,
 }
 
 impl<'tcx> CodegenCx<'tcx> {
@@ -224,6 +227,7 @@ impl<'tcx> CodegenCx<'tcx> {
             from_trait_impls: Default::default(),
             i8_i16_atomics_allowed: false,
             codegen_args,
+            memcmp_imported_fn_id: Cell::new(None),
         }
     }
 

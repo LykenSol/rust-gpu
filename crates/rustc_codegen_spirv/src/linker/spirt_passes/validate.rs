@@ -322,7 +322,13 @@ impl Validator<'_> {
         let (exts_providing_inst, caps_enabling_insts) = {
             let inst_def =
                 rspirv::grammar::CoreInstructionTable::lookup_opcode(spv_inst.opcode.as_u16())
-                    .unwrap();
+                    .ok_or_else(|| {
+                        Diag::bug([format!(
+                            "SPIR-V `{}` instruction unknown to `rspirv`",
+                            spv_inst.opcode.name()
+                        )
+                        .into()])
+                    })?;
             (
                 inst_def.extensions.iter().copied(),
                 inst_def.capabilities.iter().map(|&cap| cap as u32),

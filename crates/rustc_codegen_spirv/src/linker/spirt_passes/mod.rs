@@ -229,24 +229,22 @@ pub(super) fn run_func_passes<P>(
                             func.nodes[inst].outputs.push(output_var);
                             func.regions[region].children.insert_last(inst, func.nodes);
                         }
-                        if true {
-                            let exit_node = func.nodes.define(
-                                cx,
-                                NodeDef {
-                                    attrs: AttrSet::default(),
-                                    kind: NodeKind::ExitInvocation(
-                                        spirt::cf::ExitInvocationKind::SpvInst(wk.OpReturn.into()),
-                                    ),
-                                    inputs: [].into_iter().collect(),
-                                    child_regions: [].into_iter().collect(),
-                                    outputs: [].into_iter().collect(),
-                                }
-                                .into(),
-                            );
-                            func.regions[region]
-                                .children
-                                .insert_last(exit_node, func.nodes);
-                        }
+                        let exit_node = func.nodes.define(
+                            cx,
+                            NodeDef {
+                                attrs: AttrSet::default(),
+                                kind: NodeKind::ExitInvocation(
+                                    spirt::cf::ExitInvocationKind::Abort,
+                                ),
+                                inputs: [].into_iter().collect(),
+                                child_regions: [].into_iter().collect(),
+                                outputs: [].into_iter().collect(),
+                            }
+                            .into(),
+                        );
+                        func.regions[region]
+                            .children
+                            .insert_last(exit_node, func.nodes);
                     }),
                 },
             );
@@ -261,40 +259,58 @@ pub(super) fn run_func_passes<P>(
             after_pass(Some(module), profiler);
 
             let profiler = before_pass("qptr::partition_and_propagate", module);
-
-            let mut iterations = 0;
-            let start = std::time::Instant::now();
-            loop {
-                // FIXME(eddyb) do a "counting and/or hashing traversal" or similar,
-                // after a few iterations (or track counts of all changes to the
-                // function, but that's more intrusive), to detect a "bistable"
-                // configuration, where `remove_unused_values_in_func` *exactly*
-                // undoes everything done previously in each iteration, could
-                // even call this a "Sisyphus detector".
-                if iterations >= 100 {
-                    // FIXME(eddyb) maybe attach a SPIR-T diagnostic instead?
-                    eprintln!(
-                        "[WARNING] qptr::partition_and_propagate: giving up on fixpoint after {iterations} iterations (took {:?})",
-                        start.elapsed()
-                    );
-                    break;
-                }
-                iterations += 1;
-
-                spirt::passes::qptr::partition_and_propagate(module, &SPIRT_MEM_LAYOUT_CONFIG);
-                // HACK(eddyb) `partition_and_propagate` can create inputs/outputs
-                // into/from regions/nodes, that may not actually be later used,
-                // so this is a stop-gap solution to prevent many spurious phis, but
-                // more importantly, to prevent control-flow propagation of `qptr`s.
-                let mut any_changes = false;
-                for &func in &all_uses.funcs {
-                    if let DeclDef::Present(func_def_body) = &mut module.funcs[func].def {
-                        // FIXME(eddyb) avoid doing this except where changes occurred.
-                        any_changes |= remove_unused_values_in_func(cx, func_def_body);
+            for &func in &all_uses.funcs {
+                if let DeclDef::Present(func_def_body) = &mut module.funcs[func].def {
+                    // HACK(eddyb) bypass this entire pass on functions which
+                    // mostly consist of a massive `match` (helps with demos).
+                    if (func_def_body.at_body().at_children().into_iter())
+                        .any(|fan| fan.def().child_regions.len() >= 32)
+                    {
+                        continue;
                     }
-                }
-                if !any_changes {
-                    break;
+
+                    let mut iterations = 0;
+                    let start = std::time::Instant::now();
+                    loop {
+                        // FIXME(eddyb) do a "counting and/or hashing traversal" or similar,
+                        // after a few iterations (or track counts of all changes to the
+                        // function, but that's more intrusive), to detect a "bistable"
+                        // configuration, where `remove_unused_values_in_func` *exactly*
+                        // undoes everything done previously in each iteration, could
+                        // even call this a "Sisyphus detector".
+                        if iterations >= 100 {
+                            // FIXME(eddyb) maybe attach a SPIR-T diagnostic instead?
+                            eprintln!(
+                                "[WARNING] qptr::partition_and_propagate: giving up on fixpoint after {iterations} iterations (took {:?})",
+                                start.elapsed()
+                            );
+                            break;
+                        }
+                        iterations += 1;
+
+                        spirt::qptr::simplify::partition_locals_in_func(
+                            cx.clone(),
+                            &SPIRT_MEM_LAYOUT_CONFIG,
+                            func_def_body,
+                        );
+
+                        let report = spirt::qptr::simplify::propagate_contents_of_locals_in_func(
+                            cx.clone(),
+                            &SPIRT_MEM_LAYOUT_CONFIG,
+                            func_def_body,
+                        );
+                        if !report.any_qptrs_propagated {
+                            break;
+                        }
+
+                        // HACK(eddyb) `partition_and_propagate` can create inputs/outputs
+                        // into/from regions/nodes, that may not actually be later used,
+                        // so this is a stop-gap solution to prevent many spurious phis, but
+                        // more importantly, to prevent control-flow propagation of `qptr`s.
+                        if !remove_unused_values_in_func(cx, func_def_body) {
+                            break;
+                        }
+                    }
                 }
             }
             after_pass(Some(module), profiler);
@@ -349,11 +365,21 @@ pub(super) fn run_func_passes<P>(
     // largely doesn't make sense to have additional transformations between
     // "lifting `qptr` back to `OpTypePointer`s" and "lifting SPIR-T to SPIR-V".
     if needs_qptr_lifting {
+        // TODO(eddyb) this used to keep the old `all_uses` and that's outdated.
+        let all_uses = spirt::visit::AllUses::from_module(module);
+
         let profiler = before_pass("qptr::legalize", module);
         {
             // FIXME(eddyb) add `spirt::passes::qptr` wrappers.
             spirt::qptr::legalize::LegalizePtrs::new(cx.clone(), &SPIRT_MEM_LAYOUT_CONFIG)
                 .legalize_module(module, &all_uses);
+
+            for &func in &all_uses.funcs {
+                if let DeclDef::Present(func_def_body) = &mut module.funcs[func].def {
+                    // FIXME(eddyb) avoid doing this except where changes occurred.
+                    remove_unused_values_in_func(cx, func_def_body);
+                }
+            }
         }
         after_pass(Some(module), profiler);
 
@@ -364,6 +390,30 @@ pub(super) fn run_func_passes<P>(
         let profiler = before_pass("qptr::lift_to_spv_ptrs", module);
         spirt::passes::qptr::lift_to_spv_ptrs(module, &SPIRT_MEM_LAYOUT_CONFIG);
         after_pass(Some(module), profiler);
+
+        for name in ["reduce"] {
+            if !passes.iter().any(|pname| pname.as_ref() == name) {
+                continue;
+            }
+            let (full_name, pass_fn): (_, fn(_, &mut _)) = match name {
+                "reduce" => ("spirt_passes::reduce", reduce::reduce_in_func),
+                "fuse_selects" => (
+                    "spirt_passes::fuse_selects",
+                    fuse_selects::fuse_selects_in_func,
+                ),
+                _ => panic!("unknown `--spirt-passes={name}`"),
+            };
+            let profiler = before_pass(full_name, module);
+            for &func in &all_uses.funcs {
+                if let DeclDef::Present(func_def_body) = &mut module.funcs[func].def {
+                    pass_fn(cx, func_def_body);
+
+                    // FIXME(eddyb) avoid doing this except where changes occurred.
+                    remove_unused_values_in_func(cx, func_def_body);
+                }
+            }
+            after_pass(Some(module), profiler);
+        }
     }
 }
 

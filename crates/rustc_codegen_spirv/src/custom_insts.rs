@@ -13,7 +13,8 @@ use smallvec::SmallVec;
 /// can be detected (i.e. starting with this prefix, but the full name differs).
 ///
 /// See `CUSTOM_EXT_INST_SET`'s docs for further constraints on the full name.
-pub const CUSTOM_EXT_INST_SET_PREFIX: &str = concat!("Rust.", env!("CARGO_PKG_NAME"), ".");
+pub const CUSTOM_EXT_INST_SET_PREFIX: &str =
+    concat!("NonSemantic.Rust.", env!("CARGO_PKG_NAME"), ".");
 
 macro_rules! join_cargo_pkg_version_major_minor_patch {
     ($sep:literal) => {

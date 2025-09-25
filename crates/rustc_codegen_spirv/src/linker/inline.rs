@@ -176,13 +176,17 @@ pub fn inline(sess: &Session, module: &mut Module) -> super::Result<()> {
         {
             super::simple_passes::block_ordering_pass(&mut function);
             // Note: mem2reg requires functions to be in RPO order (i.e. block_ordering_pass)
-            super::mem2reg::mem2reg(
-                inliner.header,
-                &mut module.types_global_values,
-                &mem2reg_pointer_to_pointee,
-                &mem2reg_constants,
-                &mut function,
-            );
+
+            // FIXME(eddyb) make this conditional on `legacy_mem2reg`.
+            if true {
+                super::mem2reg::mem2reg(
+                    inliner.header,
+                    &mut module.types_global_values,
+                    &mem2reg_pointer_to_pointee,
+                    &mem2reg_constants,
+                    &mut function,
+                );
+            }
         }
 
         functions[func_idx] = FuncInliningState::Done(function);
@@ -375,6 +379,15 @@ fn should_inline(
 ) -> Result<bool, MustInlineToLegalize> {
     let callee_def = callee.def.as_ref().unwrap();
     let callee_control = callee_def.operands[0].unwrap_function_control();
+
+    // HACK(eddyb) forcing minimalist inlining.
+    if true {
+        return Ok(
+            (callee_control.contains(FunctionControl::INLINE) && callee.blocks.len() <= 64
+                || callee.blocks.len() <= 2)
+                && (call_site.caller.blocks.len() <= 64 || true),
+        );
+    }
 
     if functions_that_may_abort.contains(&callee.def_id().unwrap()) {
         return Err(MustInlineToLegalize("panicking"));

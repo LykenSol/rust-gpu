@@ -423,6 +423,7 @@ pub fn link(
         dump_spv_and_spirt(&output, dir.join(disambiguated_crate_name_for_dumps));
     }
 
+    // HACK(eddyb) temporary testing for lodestar (tinywasm).
     {
         let _timer = sess.timer("link_inline");
         inline::inline(sess, &mut output)?;
@@ -603,6 +604,18 @@ pub fn link(
             |name, _module| before_pass(name),
             |module, timer| after_pass(module, Some(timer)),
         );
+
+        {
+            let timer = before_pass("spirt::cf::callgraph::exhaustively_inline_calls_in_module");
+            spirt::cf::callgraph::CallGraph::compute(module).exhaustively_inline_calls_in_module(module);
+            after_pass(Some(module), Some(timer));
+        }
+
+        {
+            let timer = before_pass("spirt::cf::callgraph::explicitly_propagate_aborts");
+            spirt::cf::callgraph::CallGraph::compute(module).explicitly_propagate_aborts(module);
+            after_pass(Some(module), Some(timer));
+        }
 
         {
             let timer = before_pass("spirt_passes::explicit_layout::erase_when_invalid");

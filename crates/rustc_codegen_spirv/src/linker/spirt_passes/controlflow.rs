@@ -1,6 +1,7 @@
 //! SPIR-T passes related to control-flow.
 
 use crate::custom_insts::{self, CustomInst, CustomOp};
+use rustc_data_structures::fx::FxHashMap;
 use smallvec::SmallVec;
 use spirt::func_at::FuncAt;
 use spirt::{
@@ -15,6 +16,8 @@ use std::fmt::Write as _;
 // FIXME(eddyb) no longer relying on structurization, try porting this
 // to replace custom aborts in `Block`s and inject `ExitInvocation`s
 // after them (truncating the `Block` and/or parent region if necessary).
+//
+// TODO(eddyb) make this uniformly transform all functions!!!
 pub fn convert_custom_aborts_to_unstructured_returns_in_entry_points(
     linker_options: &crate::linker::Options,
     module: &mut Module,
@@ -57,20 +60,27 @@ pub fn convert_custom_aborts_to_unstructured_returns_in_entry_points(
 
     let custom_ext_inst_set = cx.intern(&custom_insts::CUSTOM_EXT_INST_SET[..]);
 
-    for (export_key, exportee) in &module.exports {
-        let (entry_point_imms, interface_global_vars, func) = match (export_key, exportee) {
-            (
-                ExportKey::SpvEntryPoint {
-                    imms,
-                    interface_global_vars,
-                },
-                &Exportee::Func(func),
-            ) => (imms, interface_global_vars, func),
-            _ => continue,
-        };
+    // FIXME(eddyb) reuse this collection work in some kind of "pass manager".
+    let spirt::visit::AllUses { funcs, .. } = spirt::visit::AllUses::from_module(module);
 
+    // HACK(eddyb) separate entry-point and non-entry-point functions.
+    let mut entry_point_imms_and_interface_gvs = FxHashMap::default();
+    for (export_key, exportee) in &module.exports {
+        if let (
+            ExportKey::SpvEntryPoint {
+                imms,
+                interface_global_vars,
+            },
+            &Exportee::Func(func),
+        ) = (export_key, exportee)
+        {
+            entry_point_imms_and_interface_gvs
+                .insert(func, (&imms[..], &interface_global_vars[..]));
+        }
+    }
+
+    for func in funcs {
         let func_decl = &mut module.funcs[func];
-        assert!(func_decl.ret_types.is_empty());
 
         let func_def_body = match &mut func_decl.def {
             DeclDef::Present(def) => def,
@@ -82,7 +92,16 @@ pub fn convert_custom_aborts_to_unstructured_returns_in_entry_points(
         if let Some(Strategy::DebugPrintf { inputs, .. }) = abort_strategy {
             let mut fmt = String::new();
 
+            let (entry_point_imms, interface_global_vars) = entry_point_imms_and_interface_gvs
+                .get(&func)
+                .copied()
+                .unwrap_or_default();
             match entry_point_imms[..] {
+                // FIXME(eddyb) not an entry-point, should instead search for
+                // e.g. an `OpName` `Attr::SpvAnnotation` in attributes.
+                [] => {
+                    fmt += "<unknown>";
+                }
                 [spv::Imm::Short(em_kind, _), ref name_imms @ ..] => {
                     assert_eq!(em_kind, wk.ExecutionModel);
                     super::decode_spv_lit_str_with(name_imms, |name| {
@@ -354,9 +373,7 @@ pub fn convert_custom_aborts_to_unstructured_returns_in_entry_points(
                             cx,
                             NodeDef {
                                 attrs: abort_inst_attrs,
-                                kind: NodeKind::ExitInvocation(cf::ExitInvocationKind::SpvInst(
-                                    wk.OpReturn.into(),
-                                )),
+                                kind: NodeKind::ExitInvocation(cf::ExitInvocationKind::Abort),
                                 inputs: [].into_iter().collect(),
                                 child_regions: [].into_iter().collect(),
                                 outputs: [].into_iter().collect(),
