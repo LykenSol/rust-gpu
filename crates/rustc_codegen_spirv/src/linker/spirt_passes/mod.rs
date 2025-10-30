@@ -3,6 +3,7 @@
 pub(crate) mod controlflow;
 pub(crate) mod debuginfo;
 pub(crate) mod diagnostics;
+mod expand;
 pub(crate) mod explicit_layout;
 mod fuse_selects;
 mod reduce;
@@ -204,6 +205,25 @@ pub(super) fn run_func_passes<P>(
             if let DeclDef::Present(func_def_body) = &mut module.funcs[func].def {
                 pass_fn(cx, func_def_body);
 
+                // FIXME(eddyb) avoid doing this except where changes occurred.
+                remove_unused_values_in_func(cx, func_def_body);
+            }
+        }
+        after_pass(Some(module), profiler);
+    }
+
+    // HACK(eddyb) this is here so it can take effect *before* `qptr::lift`!
+    {
+        use expand::TypeDrivenExpansion as _;
+
+        let profiler = before_pass("spirt_passes::expand::ExpandUnsupportedIntegers", module);
+        expand::ExpandUnsupportedIntegers::for_max_supported_width(
+            &module.cx(),
+            spirt::scalar::IntWidth::I64,
+        )
+        .expand_module(module);
+        for &func in &all_funcs {
+            if let DeclDef::Present(func_def_body) = &mut module.funcs[func].def {
                 // FIXME(eddyb) avoid doing this except where changes occurred.
                 remove_unused_values_in_func(cx, func_def_body);
             }
