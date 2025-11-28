@@ -20,7 +20,6 @@ use spirt::{
     Func, FuncDefBody, GlobalVar, Module, Node, NodeKind, Region, Type, Value, Var, VarKind, spv,
 };
 use std::collections::VecDeque;
-use std::rc::Rc;
 use std::str;
 
 // HACK(eddyb) `spv::spec::Spec` with extra `WellKnown`s (that should be upstreamed).
@@ -542,16 +541,10 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                         (func.regions[loop_body].inputs.iter()).zip_eq(&mut node_def.inputs)
                     {
                         if used_vars.get(input_var).is_none() {
-                            // FIXME(eddyb) SPIR-T should have native undef itself.
                             *initial_input = Value::Const(cx.intern(ConstDef {
                                 attrs: AttrSet::default(),
                                 ty: func.vars[input_var].ty,
-                                kind: ConstKind::SpvInst {
-                                    spv_inst_and_const_inputs: Rc::new((
-                                        wk.OpUndef.into(),
-                                        [].into_iter().collect(),
-                                    )),
-                                },
+                                kind: ConstKind::Undef,
                             }));
                         }
                     }
