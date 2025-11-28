@@ -182,6 +182,7 @@ pub(crate) fn reduce_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                     DataInstKind::FuncCall(_)
                     | DataInstKind::Mem(_)
                     | DataInstKind::QPtr(_)
+                    | DataInstKind::ThunkBind(_)
                     | DataInstKind::SpvInst(_)
                     | DataInstKind::SpvExtInst { .. },
                 ..
