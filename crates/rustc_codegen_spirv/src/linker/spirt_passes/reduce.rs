@@ -7,8 +7,8 @@ use spirt::transform::InnerInPlaceTransform;
 use spirt::visit::InnerVisit;
 use spirt::{
     Const, ConstDef, ConstKind, Context, DataInst, DataInstDef, DataInstKind,
-    EntityOrientedDenseMap, FuncDefBody, Node, NodeDef, NodeKind, Region, Type,
-    TypeDef, TypeKind, Value, Var, VarDecl, VarKind, spv,
+    EntityOrientedDenseMap, FuncDefBody, Node, NodeDef, NodeKind, Region, Type, TypeDef, TypeKind,
+    Value, Var, VarDecl, VarKind, spv,
 };
 use std::iter;
 use std::rc::Rc;
@@ -137,6 +137,7 @@ pub(crate) fn reduce_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                 kind: NodeKind::Loop { .. },
                 inputs,
                 child_regions,
+                outputs,
                 ..
             } => {
                 let body = child_regions[0];
@@ -144,10 +145,11 @@ pub(crate) fn reduce_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
                 // FIXME(eddyb) this should probably be ran in the queue loop
                 // below, to more quickly benefit from previous reductions.
                 let body_def = func_at_node.at(body).def();
-                for (&body_input_var, (&initial_input, &body_output)) in body_def
-                    .inputs
-                    .iter()
-                    .zip_eq(inputs.iter().zip_eq(&body_def.outputs))
+                for (((&body_input_var, &initial_input), &body_output), &loop_output) in
+                    (body_def.inputs.iter())
+                        .zip_eq(inputs)
+                        .zip_eq(&body_def.outputs)
+                        .zip_eq(outputs)
                 {
                     if body_output == Value::Var(body_input_var)
                         && let entry @ None = var_replacements.entry(body_input_var)
@@ -156,8 +158,18 @@ pub(crate) fn reduce_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
 
                         // FIXME(eddyb) manual tracking is fragile.
                         var_replacement_count += 1;
+
+                        if let entry @ None = var_replacements.entry(loop_output) {
+                            *entry = Some(initial_input);
+
+                            // FIXME(eddyb) manual tracking is fragile.
+                            var_replacement_count += 1;
+                        }
                     }
                 }
+
+                // FIXME(eddyb) replace `outputs[i]` with `body_def.outputs[i]`
+                // when the latter is a value defined outside the loop body.
             }
 
             &NodeDef {
@@ -798,6 +810,18 @@ impl Reducible {
                 );
                 loop_state_vars.push(new_loop_state_var);
 
+                let loop_output_vars = &mut func.nodes[loop_node].outputs;
+                let new_loop_output_var = func.vars.define(
+                    cx,
+                    VarDecl {
+                        attrs: Default::default(),
+                        ty: self.output_type,
+                        def_parent: Either::Right(loop_node),
+                        def_idx: loop_output_vars.len().try_into().unwrap(),
+                    },
+                );
+                loop_output_vars.push(new_loop_output_var);
+
                 // HACK(eddyb) generating the instruction wholesale again is not
                 // the most efficient way to go about this, but avoiding getting
                 // stuck in a loop while processing a loop is also important.
@@ -819,6 +843,7 @@ impl Reducible {
             VarKind::NodeOutput { node, output_idx } => {
                 let node_def = &*func.reborrow().at(node).def();
 
+                // FIXME(eddyb) implement loop outputs here.
                 if let NodeKind::Select(_) = node_def.kind {
                     // FIXME(eddyb) remove all the cloning and undo additions of new
                     // outputs "upstream", if they end up unused (or let DCE do it?).
@@ -880,7 +905,10 @@ impl Reducible {
                     Some(Value::Var(new_output_var))
                 } else {
                     // HACK(eddyb) sanity check pre-disaggregate.
-                    if node_def.outputs.len() != 1 || output_idx != 0 {
+                    if !node_def.child_regions.is_empty()
+                        || node_def.outputs.len() != 1
+                        || output_idx != 0
+                    {
                         return None;
                     }
 

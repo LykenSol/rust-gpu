@@ -8,6 +8,7 @@ mod fuse_selects;
 mod reduce;
 pub(crate) mod validate;
 
+use itertools::Itertools as _;
 use lazy_static::lazy_static;
 use rustc_data_structures::fx::FxIndexSet;
 use rustc_index::bit_set::DenseBitSet as BitSet;
@@ -15,10 +16,11 @@ use smallvec::SmallVec;
 use spirt::func_at::FuncAt;
 use spirt::visit::{InnerVisit, Visitor};
 use spirt::{
-    AttrSet, Const, Context, DataInstKind, DeclDef, EntityOrientedDenseMap, Func, FuncDefBody,
-    GlobalVar, Module, Node, NodeKind, Region, Type, Value, Var, VarKind, spv,
+    AttrSet, Const, ConstDef, ConstKind, Context, DataInstKind, DeclDef, EntityOrientedDenseMap,
+    Func, FuncDefBody, GlobalVar, Module, Node, NodeKind, Region, Type, Value, Var, VarKind, spv,
 };
 use std::collections::VecDeque;
+use std::rc::Rc;
 use std::str;
 
 // HACK(eddyb) `spv::spec::Spec` with extra `WellKnown`s (that should be upstreamed).
@@ -196,7 +198,7 @@ pub(super) fn run_func_passes<P>(
                 pass_fn(cx, func_def_body);
 
                 // FIXME(eddyb) avoid doing this except where changes occurred.
-                remove_unused_values_in_func(func_def_body);
+                remove_unused_values_in_func(cx, func_def_body);
             }
         }
         after_pass(Some(module), profiler);
@@ -308,7 +310,7 @@ const _: () = {
 /// a function body (both `DataInst`s and `Region` inputs/outputs).
 //
 // FIXME(eddyb) should this be a dedicated pass?
-fn remove_unused_values_in_func(func_def_body: &mut FuncDefBody) {
+fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
     // Avoid having to support unstructured control-flow.
     if func_def_body.unstructured_cfg.is_some() {
         return;
@@ -355,10 +357,12 @@ fn remove_unused_values_in_func(func_def_body: &mut FuncDefBody) {
                     }
                     VarKind::NodeOutput { node, output_idx } => {
                         let node_def = func.at(node).def();
-                        for &input in &node_def.inputs {
-                            self.mark_used(input);
+                        if !matches!(node_def.kind, NodeKind::Loop { .. }) {
+                            for &input in &node_def.inputs {
+                                self.mark_used(input);
+                            }
                         }
-                        if let NodeKind::Select(_) = node_def.kind {
+                        if let NodeKind::Select(_) | NodeKind::Loop { .. } = node_def.kind {
                             for &case in &node_def.child_regions {
                                 self.mark_used(func.at(case).def().outputs[output_idx as usize]);
                             }
@@ -440,23 +444,23 @@ fn remove_unused_values_in_func(func_def_body: &mut FuncDefBody) {
                         for &v in &node_def.inputs {
                             mark_used_and_propagate(v);
                         }
-                    } else if node_def.outputs.is_empty() {
+                    } else {
                         // FIXME(eddyb) this is an utter mess, made worse
                         // by loop nodes not being enough like RVSDG.
                         if let NodeKind::Loop { repeat_condition } = node_def.kind {
                             mark_used_and_propagate(repeat_condition);
-                        } else {
+                        } else if node_def.outputs.is_empty() {
                             // HACK(eddyb) still need to mark the instruction's
                             // inputs as used, while it has no output `Value`.
                             for &input in &node_def.inputs {
                                 mark_used_and_propagate(input);
                             }
-                        }
-                    } else {
-                        // HACK(eddyb) sanity check pre-disaggregate.
-                        assert_eq!(node_def.outputs.len(), 1);
+                        } else {
+                            // HACK(eddyb) sanity check pre-disaggregate.
+                            assert_eq!(node_def.outputs.len(), 1);
 
-                        mark_used_and_propagate(Value::Var(node_def.outputs[0]));
+                            mark_used_and_propagate(Value::Var(node_def.outputs[0]));
+                        }
                     }
                 }
             },
@@ -479,11 +483,12 @@ fn remove_unused_values_in_func(func_def_body: &mut FuncDefBody) {
         let node_def = &mut func.nodes[node];
         match &node_def.kind {
             NodeKind::Select(_) | NodeKind::Loop { .. } => {
-                let vars = match node_def.kind {
-                    NodeKind::Select(_) => &mut node_def.outputs,
-                    NodeKind::Loop { .. } => &mut func.regions[node_def.child_regions[0]].inputs,
+                let loop_body = match node_def.kind {
+                    NodeKind::Select(_) => None,
+                    NodeKind::Loop { .. } => Some(node_def.child_regions[0]),
                     _ => unreachable!(),
                 };
+                let vars = &mut node_def.outputs;
 
                 fn indexed_retain<T, const N: usize>(
                     v: &mut SmallVec<[T; N]>,
@@ -496,7 +501,10 @@ fn remove_unused_values_in_func(func_def_body: &mut FuncDefBody) {
                 let mut removed_vars = None;
                 let original_var_count = vars.len();
                 indexed_retain(vars, |var_idx, &var| {
-                    let used = used_vars.get(var).is_some();
+                    let used = used_vars.get(var).is_some()
+                        || loop_body.is_some_and(|body| {
+                            used_vars.get(func.regions[body].inputs[var_idx]).is_some()
+                        });
                     if !used {
                         removed_vars
                             .get_or_insert_with(|| BitSet::new_empty(original_var_count))
@@ -507,17 +515,45 @@ fn remove_unused_values_in_func(func_def_body: &mut FuncDefBody) {
 
                 // Only update `VarDecl`s and `Value`s if any `Var`s were removed.
                 if let Some(removed_vars) = removed_vars {
-                    for (var_idx, &var) in vars.iter().enumerate() {
-                        func.vars[var].def_idx = var_idx.try_into().unwrap();
-                    }
+                    let mut update_vars_def_idx = |vars: &[Var]| {
+                        for (var_idx, &var) in vars.iter().enumerate() {
+                            func.vars[var].def_idx = var_idx.try_into().unwrap();
+                        }
+                    };
+                    update_vars_def_idx(vars);
 
-                    let prune_values =
-                        |values: &mut _| indexed_retain(values, |i, _| !removed_vars.contains(i));
-                    if let NodeKind::Loop { .. } = node_def.kind {
-                        prune_values(&mut node_def.inputs);
+                    let keep = |i| !removed_vars.contains(i);
+                    if let Some(loop_body) = loop_body {
+                        indexed_retain(&mut node_def.inputs, |i, _| keep(i));
+
+                        let input_vars = &mut func.regions[loop_body].inputs;
+                        indexed_retain(input_vars, |i, _| keep(i));
+                        update_vars_def_idx(input_vars);
                     }
                     for &child_region in &node_def.child_regions {
-                        prune_values(&mut func.regions[child_region].outputs);
+                        indexed_retain(&mut func.regions[child_region].outputs, |i, _| keep(i));
+                    }
+                }
+
+                // HACK(eddyb) overwrite any used "initial inputs" with `undef`,
+                // if their slots had to be kept around due to used loop outputs.
+                if let Some(loop_body) = loop_body {
+                    for (&input_var, initial_input) in
+                        (func.regions[loop_body].inputs.iter()).zip_eq(&mut node_def.inputs)
+                    {
+                        if used_vars.get(input_var).is_none() {
+                            // FIXME(eddyb) SPIR-T should have native undef itself.
+                            *initial_input = Value::Const(cx.intern(ConstDef {
+                                attrs: AttrSet::default(),
+                                ty: func.vars[input_var].ty,
+                                kind: ConstKind::SpvInst {
+                                    spv_inst_and_const_inputs: Rc::new((
+                                        wk.OpUndef.into(),
+                                        [].into_iter().collect(),
+                                    )),
+                                },
+                            }));
+                        }
                     }
                 }
             }
