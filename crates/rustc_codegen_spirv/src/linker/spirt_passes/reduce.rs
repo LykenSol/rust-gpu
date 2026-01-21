@@ -316,6 +316,38 @@ pub(crate) fn reduce_in_func(cx: &Context, func_def_body: &mut FuncDefBody) {
 
                                     assert_eq!(inputs.len(), 0);
 
+                                    // HACK(eddyb) `spv::lift` misbehaves when `ExitInvocation` is found anywhere
+                                    // except the last node in a region, so this is the best place to remove all
+                                    // following nodes, if the case ended in `ExitInvocation`.
+                                    let case_diverges = children.iter().last.is_some_and(|node| {
+                                        matches!(
+                                            func_def_body.nodes[node].kind,
+                                            NodeKind::ExitInvocation(_)
+                                        )
+                                    });
+                                    if case_diverges {
+                                        let parent_region_def =
+                                            &mut func_def_body.regions[parent_region];
+                                        while let Some(next_node) =
+                                            func_def_body.nodes[node].next_in_list()
+                                        {
+                                            parent_region_def
+                                                .children
+                                                .remove(next_node, &mut func_def_body.nodes);
+                                        }
+                                        for output in &mut parent_region_def.outputs {
+                                            let ty = match *output {
+                                                Value::Const(ct) => cx[ct].ty,
+                                                Value::Var(var) => func_def_body.vars[var].ty,
+                                            };
+                                            *output = Value::Const(cx.intern(ConstDef {
+                                                attrs: Default::default(),
+                                                ty,
+                                                kind: ConstKind::Undef,
+                                            }));
+                                        }
+                                    }
+
                                     // Move every child of the taken case region, to just before
                                     // `node`, in its parent region (effectively replacing it).
                                     let parent_region_children =
@@ -1944,6 +1976,21 @@ impl Reducible {
                 // which could lead to endless cycling (see `FlipIfElseCond`).
                 if let PureOp::BoolUnOp(scalar::BoolUnOp::Not) = self.op {
                     return None;
+                }
+
+                if true {
+                    return None;
+                }
+                if false {
+                    if let PureOp::IntBinOpConstRhs(scalar::IntBinOp::LeU, _) = self.op {
+                        return None;
+                    }
+                    if let PureOp::IntBinOpConstRhs(scalar::IntBinOp::LtU, _) = self.op {
+                        return None;
+                    }
+                    if let PureOp::IntBinOpConstRhs(scalar::IntBinOp::Add, _) = self.op {
+                        return None;
+                    }
                 }
 
                 let loop_node = *parent_map.region_parent.get(region)?;

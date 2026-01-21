@@ -605,9 +605,13 @@ pub fn link(
             |module, timer| after_pass(module, Some(timer)),
         );
 
-        {
+        // FIXME(eddyb) this is a bad spot to do it (doesn't re-run e.g. `reduce`).
+        // NOTE(eddyb) this can also be injected via `--spirt-passes=exhaustively_inline`
+        // (in which case, this does no additional work).
+        if true {
             let timer = before_pass("spirt::cf::callgraph::exhaustively_inline_calls_in_module");
-            spirt::cf::callgraph::CallGraph::compute(module).exhaustively_inline_calls_in_module(module);
+            spirt::cf::callgraph::CallGraph::compute(module)
+                .exhaustively_inline_calls_in_module(module);
             after_pass(Some(module), Some(timer));
         }
 

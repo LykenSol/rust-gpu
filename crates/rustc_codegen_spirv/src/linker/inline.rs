@@ -385,7 +385,8 @@ fn should_inline(
         return Ok(
             (callee_control.contains(FunctionControl::INLINE) && callee.blocks.len() <= 64
                 || callee.blocks.len() <= 2)
-                && (call_site.caller.blocks.len() <= 64 || true),
+                && (call_site.caller.blocks.len() <= 64 || true)
+                || call_site.caller.blocks.len() <= 2 && false, /* HACK(eddyb) trying to inline Rust entry into SPIR-V entrypoint */
         );
     }
 

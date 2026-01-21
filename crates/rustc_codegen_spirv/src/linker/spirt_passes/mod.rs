@@ -180,7 +180,7 @@ pub(super) fn run_func_passes<P>(
                 &spirt::cf::stackful::CallStackEmuConfig {
                     layout_config: SPIRT_MEM_LAYOUT_CONFIG,
                     stack_unit_bytes: NonZeroU32::new(4).unwrap(),
-                    stack_size_bytes: 1024,
+                    stack_size_bytes: 64 * 1024,
                     build_fatal_error: Box::new(move |msg, cx, func_at_region| {
                         let wk = &spv::spec::Spec::get().well_known;
 
@@ -253,6 +253,18 @@ pub(super) fn run_func_passes<P>(
         }
 
         // HACK(eddyb) not really a function pass.
+        if name == "exhaustively_inline" {
+            let profiler = before_pass(
+                "spirt::cf::callgraph::exhaustively_inline_calls_in_module",
+                module,
+            );
+            spirt::cf::callgraph::CallGraph::compute(module)
+                .exhaustively_inline_calls_in_module(module);
+            after_pass(Some(module), profiler);
+            continue;
+        }
+
+        // HACK(eddyb) not really a function pass.
         if name == "qptr" {
             let profiler = before_pass("qptr::lower_from_spv_ptrs", module);
             spirt::passes::qptr::lower_from_spv_ptrs(module, &SPIRT_MEM_LAYOUT_CONFIG);
@@ -265,6 +277,7 @@ pub(super) fn run_func_passes<P>(
                     // mostly consist of a massive `match` (helps with demos).
                     if (func_def_body.at_body().at_children().into_iter())
                         .any(|fan| fan.def().child_regions.len() >= 32)
+                        || /* HACK(eddyb) fully disable */ true
                     {
                         continue;
                     }
@@ -795,7 +808,26 @@ fn remove_unused_values_in_func(cx: &Context, func_def_body: &mut FuncDefBody) -
             | DataInstKind::ThunkBind(_)
             | DataInstKind::SpvInst { .. }
             | DataInstKind::SpvExtInst { .. } => {
+                let is_undef = |v| match v {
+                    Value::Const(ct) => {
+                        let ct_def = &cx[ct];
+
+                        // HACK(eddyb) avoid erasing diagnostics attached to consts.
+                        if !ct_def.attrs.diags(cx).is_empty() {
+                            return false;
+                        }
+
+                        ct_def.kind == ConstKind::Undef
+                    }
+                    Value::Var(_) => false,
+                };
                 let used = match &node_def.kind {
+                    // HACK(eddyb) this isn't technically appropriate to do here,
+                    // but `undef` stores can occur in large amounts in Rust code
+                    // (e.g. values like `None::<u32>` may result in a store of
+                    // the `None` tag, and an `undef` store for the unused `u32`).
+                    DataInstKind::Mem(MemOp::Store { .. }) if is_undef(node_def.inputs[1]) => false,
+
                     DataInstKind::SpvInst(spv_inst, _) if spv_inst.opcode == wk.OpNop => false,
 
                     _ => {

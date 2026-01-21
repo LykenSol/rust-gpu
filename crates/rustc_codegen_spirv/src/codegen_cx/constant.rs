@@ -310,7 +310,19 @@ impl ConstCodegenMethods for CodegenCx<'_> {
     }
 
     fn const_ptr_byte_offset(&self, ptr: Self::Value, offset: Size) -> Self::Value {
-        let ptr = ptr.strip_ptrcasts();
+        // FIXME(eddyb) while replacing `ptr` with `ptr.strip_ptrcasts()` would
+        // normally be a good idea, it can't actually work here, given that
+        // `def_constant` bitcasts pointers to `*i8` in order to offset them.
+
+        // HACK(eddyb) generate pointer constants by bitcasting integers directly.
+        {
+            let original_ptr = ptr.strip_ptrcasts();
+            if let Some(SpirvConst::Null) = self.builder.lookup_const(original_ptr)
+                && let Ok(addr_u32) = u32::try_from(offset.bytes())
+            {
+                return self.const_bitcast(self.const_u32(addr_u32), ptr.ty);
+            }
+        }
 
         if offset == Size::ZERO {
             return ptr;

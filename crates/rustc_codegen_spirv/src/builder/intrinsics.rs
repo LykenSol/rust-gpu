@@ -451,9 +451,9 @@ impl<'a, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'tcx> {
 impl Builder<'_, '_> {
     fn memcmp(&mut self, lhs: SpirvValue, rhs: SpirvValue, count: SpirvValue) -> SpirvValue {
         let memcmp_return_type = SpirvType::Integer(32, true).def(self.span(), self);
+        let byte_ptr_type = self.type_ptr_to(self.type_i8());
         let memcmp_imported_fn_id = self.memcmp_imported_fn_id.get().unwrap_or_else(|| {
             let memcmp_imported_fn_id = {
-                let byte_ptr_type = self.type_ptr_to(self.type_i8());
                 let function_type = SpirvType::Function {
                     return_type: memcmp_return_type,
                     arguments: &[byte_ptr_type, byte_ptr_type, self.type_usize()],
@@ -481,6 +481,9 @@ impl Builder<'_, '_> {
             self.memcmp_imported_fn_id.set(Some(memcmp_imported_fn_id));
             memcmp_imported_fn_id
         });
+
+        let [lhs, rhs] = [lhs, rhs].map(|ptr| self.pointercast(ptr, byte_ptr_type));
+
         self.emit()
             .function_call(
                 memcmp_return_type,

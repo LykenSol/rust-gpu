@@ -659,17 +659,11 @@ fn do_link(
 
     let mut modules = Vec::new();
     let mut add_module = |file_name: &OsStr, bytes: &[u8]| {
+        if let Some(dir) = &cg_args.dump_pre_link {
+            std::fs::write(dir.join(file_name).with_extension("spv"), bytes).unwrap();
+        }
         let module =
             with_rspirv_loader(|loader| rspirv::binary::parse_bytes(bytes, loader)).unwrap();
-        if let Some(dir) = &cg_args.dump_pre_link {
-            // FIXME(eddyb) is it a good idea to re-`assemble` the `rspirv::dr`
-            // module, or should this just save the original bytes?
-            std::fs::write(
-                dir.join(file_name).with_extension("spv"),
-                spirv_tools::binary::from_binary(&module.assemble()),
-            )
-            .unwrap();
-        }
         modules.push(module);
     };
 
